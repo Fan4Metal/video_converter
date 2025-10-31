@@ -1,13 +1,31 @@
-import wx
 import ctypes
-import subprocess
-import os
-import threading
-import re
 import json
+import os
+import re
+import subprocess
+import sys
+import threading
 import time
 
+import wx
+
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
+
+
+def get_resource_path(relative_path):
+    """
+    Определение пути для запуска из автономного exe файла.
+    Pyinstaller cоздает временную папку, путь в _MEIPASS.
+    """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+FFMPEG_PATH = get_resource_path("ffmpeg.exe")
+FFPROBE_PATH = get_resource_path("ffprobe.exe")
 
 
 # --- Определение битрейта по количеству каналов ---
@@ -30,10 +48,9 @@ def get_audio_tracks(filepath):
         return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
 
     try:
-        # ffprobe JSON с тегами языка и заголовка
         result = subprocess.run(
             [
-                "ffprobe",
+                FFPROBE_PATH,
                 "-v",
                 "error",
                 "-select_streams",
@@ -62,7 +79,6 @@ def get_audio_tracks(filepath):
             title_raw = tags.get("title", "").strip()
             title = fix_encoding(title_raw)
 
-            # формат битрейта в кбит/с
             if br:
                 try:
                     br_kbps = int(int(br) / 1000)
@@ -75,7 +91,7 @@ def get_audio_tracks(filepath):
             if title:
                 desc_parts.append(f"«{title}»")
 
-            desc = " (" + ", ".join(desc_parts[1:]) + ")"  # всё кроме индекса
+            desc = " (" + ", ".join(desc_parts[1:]) + ")"
             full_desc = f"{desc_parts[0]}{desc}"
             tracks.append(full_desc)
 
@@ -103,10 +119,11 @@ class VideoConverter(wx.Frame):
         self.selected_track = 0
         self.qp_value = 22
         self.duration = 0
-        self.log_visible = True  # текущее состояние лога
-        self.original_size = self.GetSize()  # сохраняем исходный размер
+        self.log_visible = True
+        self.converting = False
+        self.process = None
 
-        # --- Основная компоновка ---
+        # --- Компоновка интерфейса ---
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         # --- Ввод файла ---
@@ -117,12 +134,12 @@ class VideoConverter(wx.Frame):
         file_box.Add(btn_browse, 0, wx.ALL, 5)
         vbox.Add(file_box, 0, wx.EXPAND)
 
-        # --- Выбор аудио дорожки ---
+        # --- Аудио дорожка ---
         self.audio_choice = wx.Choice(panel, choices=[])
         vbox.Add(wx.StaticText(panel, label="Аудио дорожка:"), 0, wx.LEFT | wx.TOP, 8)
         vbox.Add(self.audio_choice, 0, wx.EXPAND | wx.ALL, 5)
 
-        # --- Слайдер качества (QP) ---
+        # --- Слайдер качества ---
         vbox.Add(wx.StaticText(panel, label="Качество (QP, меньше = лучше):"), 0, wx.LEFT | wx.TOP, 8)
         self.qp_slider = wx.Slider(panel, minValue=14, maxValue=30, value=22, style=wx.SL_HORIZONTAL)
         vbox.Add(self.qp_slider, 0, wx.EXPAND | wx.ALL, 5)
@@ -151,40 +168,35 @@ class VideoConverter(wx.Frame):
 
         panel.SetSizer(vbox)
 
-        # --- События ---
+        # --- Привязки событий ---
         btn_browse.Bind(wx.EVT_BUTTON, self.on_browse)
         self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
         self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
 
-        # Устанавливаем размер и позицию окна
-        self.SetSize(self.FromDIP(wx.Size(700, 580)))
-        self.SetMinSize(self.FromDIP(wx.Size(700, 269)))  # Минимальный размер окна
+        self.SetSize(self.FromDIP(wx.Size(750, 580)))
+        self.SetMinSize(self.FromDIP(wx.Size(750, 269)))
         self.Centre()
         self.on_toggle_log(None)
         self.Show()
 
-    # --- Переключение видимости лога ---
+        if not os.path.isfile(FFMPEG_PATH):
+            self.log.AppendText("Не найден ffmpeg.exe!\n")
+        if not os.path.isfile(FFPROBE_PATH):
+            self.log.AppendText("Не найден ffprobe.exe!\n")
+
+    # --- Показать/Скрыть лог ---
     def on_toggle_log(self, event):
-        """Сворачивание/разворачивание лога с изменением размера окна"""
         if self.log_visible:
-            # Скрыть лог и уменьшить окно
             self.log.Hide()
             self.Layout()
             self.btn_toggle_log.SetLabel("📋 Показать лог")
-
-            self.SetSize(self.FromDIP(wx.Size(700, 270)))
-            # self.SetMinSize(self.FromDIP(wx.Size(700, 265)))
-
+            self.SetSize(self.FromDIP(wx.Size(750, 270)))
         else:
-            # Показать лог и восстановить оригинальный размер
             self.log.Show()
             self.Layout()
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
-
-            # Восстанавливаем сохраненный размер
-            self.SetSize(self.FromDIP(wx.Size(700, 580)))
-            # self.SetMinSize(self.FromDIP(wx.Size(700, 480)))
-
+            self.SetSize(self.FromDIP(wx.Size(750, 580)))
         self.log_visible = not self.log_visible
 
     # --- Обновление QP ---
@@ -206,17 +218,15 @@ class VideoConverter(wx.Frame):
         self.file_txt.SetValue(path)
         self.log.AppendText(f"Выбран файл: {path}\n")
 
-        # Получаем аудио дорожки
         tracks = get_audio_tracks(path)
         self.audio_tracks = tracks
         self.audio_choice.Set(tracks)
         if tracks:
             self.audio_choice.SetSelection(0)
 
-        # Получаем длительность видео
         try:
             dur = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path], capture_output=True, text=True
+                [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path], capture_output=True, text=True
             )
             self.duration = float(dur.stdout.strip())
             self.log.AppendText(f"Длительность: {self.duration:.1f} сек\n")
@@ -225,6 +235,10 @@ class VideoConverter(wx.Frame):
 
     # --- Конвертация ---
     def on_convert(self, event):
+        if self.converting:
+            self.cancel_conversion()
+            return
+
         if not self.input_file:
             wx.MessageBox("Выберите файл!", "Ошибка", wx.OK | wx.ICON_ERROR)
             return
@@ -234,11 +248,10 @@ class VideoConverter(wx.Frame):
             wx.MessageBox("Не выбрана аудиодорожка!", "Ошибка", wx.OK | wx.ICON_ERROR)
             return
 
-        # Получаем количество каналов
         try:
             info = subprocess.run(
                 [
-                    "ffprobe",
+                    FFPROBE_PATH,
                     "-v",
                     "error",
                     "-select_streams",
@@ -258,6 +271,7 @@ class VideoConverter(wx.Frame):
 
         bitrate = get_audio_bitrate(ch)
         self.output_file = os.path.splitext(self.input_file)[0] + "_conv.mp4"
+
         if os.path.exists(self.output_file):
             overwrite = wx.MessageBox(
                 f"Файл {os.path.basename(self.output_file)} уже существует! Перезаписать?", "Внимание!", wx.YES_NO | wx.ICON_WARNING
@@ -265,19 +279,19 @@ class VideoConverter(wx.Frame):
             if overwrite != wx.YES:
                 return
 
+        self.converting = True
+        self.btn_start.SetLabel("⏹ Отмена")
         self.log.AppendText(f"\n🎬 Конвертация...\nКаналов: {ch} → {bitrate}, QP: {self.qp_value}\n")
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
 
         threading.Thread(target=self.run_ffmpeg_with_progress, args=(bitrate,), daemon=True).start()
 
-    # --- Конвертация с обновлением прогресса ---
+    # --- Основная конвертация ---
     def run_ffmpeg_with_progress(self, bitrate):
-        """Запуск ffmpeg с отображением прогресса, скорости и FPS"""
         audio_index = self.selected_track
-
         cmd = [
-            "ffmpeg",
+            FFMPEG_PATH,
             "-hide_banner",
             "-y",
             "-i",
@@ -313,7 +327,7 @@ class VideoConverter(wx.Frame):
             self.output_file,
         ]
 
-        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, universal_newlines=True)
+        self.process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, universal_newlines=True)
 
         total_duration = self.duration or 1
         time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -323,8 +337,9 @@ class VideoConverter(wx.Frame):
         current_speed = "?"
         current_fps = "?"
 
-        for line in process.stderr:
-            # Находим таймкод (progress)
+        for line in self.process.stderr:
+            if self.process.poll() is not None:
+                break
             match = time_regex.search(line)
             if match:
                 h, m, s = match.groups()
@@ -351,10 +366,58 @@ class VideoConverter(wx.Frame):
                     f"Прогресс: {progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps",
                 )
 
-        process.wait()
+        if self.process and self.process.poll() is None:
+            self.process.wait()
+
         wx.CallAfter(self.progress.SetValue, 100)
+        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
         wx.CallAfter(self.progress_label.SetLabel, "✅ Завершено │ ⚡ 1.0x │ 🎞️ — fps")
-        wx.CallAfter(self.log.AppendText, f"\n✅ Готово: {self.output_file}\n")
+        wx.CallAfter(self.log.AppendText, f"\nРабота завершена: {self.output_file}\n")
+        self.converting = False
+        self.process = None
+
+    # --- Отмена конвертации ---
+    def cancel_conversion(self):
+        if self.process and self.process.poll() is None:
+            try:
+                self.log.AppendText("\n⏹ Отмена конвертации...\n")
+                self.process.terminate()
+                time.sleep(0.5)
+                if self.process.poll() is None:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self.process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                self.log.AppendText("❌ Конвертация отменена пользователем.\n")
+            except Exception as e:
+                self.log.AppendText(f"Ошибка при завершении процесса: {e}\n")
+
+        # Удаляем неполный файл
+        if self.output_file and os.path.exists(self.output_file):
+            try:
+                os.remove(self.output_file)
+                self.log.AppendText(f"🗑 Удалён неполный файл: {os.path.basename(self.output_file)}\n")
+            except Exception as e:
+                self.log.AppendText(f"⚠️ Не удалось удалить {self.output_file}: {e}\n")
+
+        self.process = None
+        self.converting = False
+        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
+        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем")
+
+    # --- Закрытие окна ---
+    def on_close(self, event):
+        if self.converting:
+            res = wx.MessageBox(
+                "Конвертация ещё выполняется. Остановить и выйти?",
+                "Подтверждение",
+                wx.YES_NO | wx.ICON_WARNING,
+            )
+            if res != wx.YES:
+                event.Veto()
+                return
+            else:
+                self.cancel_conversion()
+        self.Destroy()
 
 
 # --- Drag&Drop класс ---
