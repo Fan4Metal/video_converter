@@ -4,6 +4,8 @@ import subprocess
 import os
 import threading
 import re
+import json
+
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
@@ -23,9 +25,9 @@ def get_audio_bitrate(channels: int) -> str:
 
 # --- Извлечение списка аудиодорожек ---
 def get_audio_tracks(filepath):
-    import json
-    import subprocess
-    import chardet  # pip install chardet
+    def fix_encoding(text: str):
+        """Преобразование кодировки в UTF-8"""
+        return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
 
     try:
         # ffprobe JSON с тегами языка и заголовка
@@ -48,9 +50,6 @@ def get_audio_tracks(filepath):
         )
         data = json.loads(result.stdout)
         tracks = []
-
-        def fix_encoding(text: str):
-            return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
 
         for stream in data.get("streams", []):
             idx = stream.get("index", "?")
@@ -90,9 +89,12 @@ def get_audio_tracks(filepath):
 # --- Основное окно приложения ---
 class VideoConverter(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="🎬 Video Converter (NVENC + AAC)", size=(700, 480))
+        super().__init__(
+            None,
+            title="🎬 Video Converter (NVENC + AAC)",
+            style=(wx.DEFAULT_FRAME_STYLE | wx.WANTS_CHARS) & ~(wx.RESIZE_BORDER | wx.MAXIMIZE_BOX),
+        )
         panel = wx.Panel(self)
-        # Drag&Drop поддержка
         panel.SetDropTarget(FileDropTarget(self))
 
         self.input_file = ""
@@ -100,8 +102,11 @@ class VideoConverter(wx.Frame):
         self.audio_tracks = []
         self.selected_track = 0
         self.qp_value = 22
-        self.duration = 0  # длительность видео в секундах
+        self.duration = 0
+        self.log_visible = True  # текущее состояние лога
+        self.original_size = self.GetSize()  # сохраняем исходный размер
 
+        # --- Основная компоновка ---
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         # --- Ввод файла ---
@@ -125,11 +130,16 @@ class VideoConverter(wx.Frame):
         vbox.Add(self.qp_label, 0, wx.LEFT, 12)
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
-        # --- Кнопка запуска ---
+        # --- Кнопки управления ---
+        btn_box = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
-        vbox.Add(self.btn_start, 0, wx.ALIGN_CENTER | wx.ALL, 10)
+        self.btn_toggle_log = wx.Button(panel, label="📋 Скрыть лог", size=self.FromDIP(wx.Size(100, 25)))
+        self.btn_toggle_log.SetToolTip("Показать/Скрыть лог")
+        btn_box.Add(self.btn_start, 1, wx.ALL | wx.EXPAND, 5)
+        btn_box.Add(self.btn_toggle_log, 0, wx.ALL, 5)
+        vbox.Add(btn_box, 0, wx.EXPAND)
 
-        # --- Прогресс-бар ---
+        # --- Прогресс ---
         self.progress = wx.Gauge(panel, range=100, size=(-1, 25))
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, 5)
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
@@ -144,6 +154,38 @@ class VideoConverter(wx.Frame):
         # --- События ---
         btn_browse.Bind(wx.EVT_BUTTON, self.on_browse)
         self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
+        self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
+
+        # Устанавливаем размер и позицию окна
+        self.SetSize(self.FromDIP(wx.Size(700, 580)))
+        self.SetMinSize(self.FromDIP(wx.Size(700, 269)))  # Минимальный размер окна
+        self.Centre()
+        self.on_toggle_log(None)
+        self.Show()
+
+    # --- Переключение видимости лога ---
+    def on_toggle_log(self, event):
+        """Сворачивание/разворачивание лога с изменением размера окна"""
+        if self.log_visible:
+            # Скрыть лог и уменьшить окно
+            self.log.Hide()
+            self.Layout()
+            self.btn_toggle_log.SetLabel("📋 Показать лог")
+
+            self.SetSize(self.FromDIP(wx.Size(700, 270)))
+            # self.SetMinSize(self.FromDIP(wx.Size(700, 265)))
+
+        else:
+            # Показать лог и восстановить оригинальный размер
+            self.log.Show()
+            self.Layout()
+            self.btn_toggle_log.SetLabel("📋 Скрыть лог")
+
+            # Восстанавливаем сохраненный размер
+            self.SetSize(self.FromDIP(wx.Size(700, 580)))
+            # self.SetMinSize(self.FromDIP(wx.Size(700, 480)))
+
+        self.log_visible = not self.log_visible
 
     # --- Обновление QP ---
     def on_qp_change(self, event):
@@ -309,8 +351,4 @@ class FileDropTarget(wx.FileDropTarget):
 if __name__ == "__main__":
     app = wx.App(False)
     top = VideoConverter()
-    top.SetClientSize(top.FromDIP(wx.Size(700, 480)))
-    top.SetMinSize(top.Size)
-    top.Centre()
-    top.Show()
     app.MainLoop()
