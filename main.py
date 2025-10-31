@@ -341,6 +341,9 @@ class VideoConverter(wx.Frame):
                 if fps_match:
                     current_fps = fps_match.group(1)
 
+                if "frame=" in line:
+                    wx.CallAfter(self.log.AppendText, line)
+
                 # Обновляем GUI
                 wx.CallAfter(self.progress.SetValue, progress)
                 wx.CallAfter(
