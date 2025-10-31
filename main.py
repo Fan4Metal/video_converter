@@ -5,7 +5,7 @@ import os
 import threading
 import re
 import json
-
+import time
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
@@ -273,7 +273,7 @@ class VideoConverter(wx.Frame):
 
     # --- Конвертация с обновлением прогресса ---
     def run_ffmpeg_with_progress(self, bitrate):
-        # индекс выбранной аудиодорожки
+        """Запуск ffmpeg с отображением прогресса, скорости и FPS"""
         audio_index = self.selected_track
 
         cmd = [
@@ -283,9 +283,9 @@ class VideoConverter(wx.Frame):
             "-i",
             self.input_file,
             "-map",
-            "0:v:0",  # берём первый видеопоток
+            "0:v:0",
             "-map",
-            f"0:a:{audio_index}",  # берём выбранный пользователем аудиопоток
+            f"0:a:{audio_index}",
             "-c:v",
             "h264_nvenc",
             "-pix_fmt",
@@ -317,21 +317,40 @@ class VideoConverter(wx.Frame):
 
         total_duration = self.duration or 1
         time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+        speed_regex = re.compile(r"speed=\s*([\d\.]+)x")
+        fps_regex = re.compile(r"fps=\s*([\d\.]+)")
+
+        current_speed = "?"
+        current_fps = "?"
 
         for line in process.stderr:
+            # Находим таймкод (progress)
             match = time_regex.search(line)
             if match:
                 h, m, s = match.groups()
                 current_time = int(h) * 3600 + int(m) * 60 + float(s)
                 progress = min(int(current_time / total_duration * 100), 100)
+
+                # Парсим скорость
+                speed_match = speed_regex.search(line)
+                if speed_match:
+                    current_speed = speed_match.group(1) + "x"
+
+                # Парсим FPS
+                fps_match = fps_regex.search(line)
+                if fps_match:
+                    current_fps = fps_match.group(1)
+
+                # Обновляем GUI
                 wx.CallAfter(self.progress.SetValue, progress)
-                wx.CallAfter(self.progress_label.SetLabel, f"Прогресс: {progress}%")
-            # if "frame=" in line:
-            #     wx.CallAfter(self.log.AppendText, line)
+                wx.CallAfter(
+                    self.progress_label.SetLabel,
+                    f"Прогресс: {progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps",
+                )
 
         process.wait()
         wx.CallAfter(self.progress.SetValue, 100)
-        wx.CallAfter(self.progress_label.SetLabel, "✅ Завершено")
+        wx.CallAfter(self.progress_label.SetLabel, "✅ Завершено │ ⚡ 1.0x │ 🎞️ — fps")
         wx.CallAfter(self.log.AppendText, f"\n✅ Готово: {self.output_file}\n")
 
 
