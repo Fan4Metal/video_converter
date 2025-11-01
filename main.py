@@ -129,9 +129,9 @@ class VideoConverter(wx.Frame):
         # --- Ввод файла ---
         file_box = wx.BoxSizer(wx.HORIZONTAL)
         self.file_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
-        btn_browse = wx.Button(panel, label="Выбрать файл...")
+        self.btn_browse = wx.Button(panel, label="Выбрать файл...")
         file_box.Add(self.file_txt, 1, wx.ALL | wx.EXPAND, 5)
-        file_box.Add(btn_browse, 0, wx.ALL, 5)
+        file_box.Add(self.btn_browse, 0, wx.ALL, 5)
         vbox.Add(file_box, 0, wx.EXPAND)
 
         # --- Аудио дорожка ---
@@ -163,13 +163,13 @@ class VideoConverter(wx.Frame):
         vbox.Add(self.progress_label, 0, wx.LEFT, 12)
 
         # --- Лог ---
-        self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
         vbox.Add(self.log, 1, wx.EXPAND | wx.ALL, 5)
 
         panel.SetSizer(vbox)
 
         # --- Привязки событий ---
-        btn_browse.Bind(wx.EVT_BUTTON, self.on_browse)
+        self.btn_browse.Bind(wx.EVT_BUTTON, self.on_browse)
         self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
         self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
         self.Bind(wx.EVT_CLOSE, self.on_close)
@@ -359,7 +359,12 @@ class VideoConverter(wx.Frame):
                     current_fps = fps_match.group(1)
 
                 if "frame=" in line:
-                    wx.CallAfter(self.log.AppendText, line)
+                    autoscroll = self.log.HasFocus()
+                    if autoscroll:
+                        wx.CallAfter(self.log.AppendText, line)
+                    else:
+                        self.log.GetParent().Freeze()
+                        wx.CallAfter(self.log.AppendText, line)
                         self.log.GetParent().Thaw()
 
                 elapsed_time_match = time_elapsed_regex.search(line)
