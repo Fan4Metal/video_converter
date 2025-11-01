@@ -331,6 +331,7 @@ class VideoConverter(wx.Frame):
 
         total_duration = self.duration or 1
         time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+        time_elapsed_regex = re.compile(r"elapsed=(\d+):(\d+):(\d+)\.\d+")
         speed_regex = re.compile(r"speed=\s*([\d\.]+)x")
         fps_regex = re.compile(r"fps=\s*([\d\.]+)")
 
@@ -358,12 +359,17 @@ class VideoConverter(wx.Frame):
 
                 if "frame=" in line:
                     wx.CallAfter(self.log.AppendText, line)
+                        self.log.GetParent().Thaw()
+
+                elapsed_time_match = time_elapsed_regex.search(line)
+                if elapsed_time_match:
+                    elapsed_time = elapsed_time_match.group(1) + ":" + elapsed_time_match.group(2) + ":" + elapsed_time_match.group(3)
 
                 # Обновляем GUI
                 wx.CallAfter(self.progress.SetValue, progress)
                 wx.CallAfter(
                     self.progress_label.SetLabel,
-                    f"Прогресс: {progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps",
+                    f"Прогресс: {progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps │ ⏱ {elapsed_time}",
                 )
 
         if self.process and self.process.poll() is None:
