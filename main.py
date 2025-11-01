@@ -285,6 +285,7 @@ class VideoConverter(wx.Frame):
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
 
+        self.disable_interface()
         threading.Thread(target=self.run_ffmpeg_with_progress, args=(bitrate,), daemon=True).start()
 
     # --- Основная конвертация ---
@@ -381,6 +382,7 @@ class VideoConverter(wx.Frame):
         wx.CallAfter(self.log.AppendText, f"\nРабота завершена: {self.output_file}\n")
         self.converting = False
         self.process = None
+        self.enable_interface()
 
     # --- Отмена конвертации ---
     def cancel_conversion(self):
@@ -424,6 +426,18 @@ class VideoConverter(wx.Frame):
             else:
                 self.cancel_conversion()
         self.Destroy()
+
+    def disable_interface(self):
+        print("disable_interface")
+        self.btn_browse.Disable()
+        self.qp_slider.Disable()
+        self.audio_choice.Disable()
+
+    def enable_interface(self):
+        print("enable_interface")
+        self.btn_browse.Enable()
+        self.qp_slider.Enable()
+        self.audio_choice.Enable()
 
 
 # --- Drag&Drop класс ---
