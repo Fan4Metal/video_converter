@@ -82,7 +82,7 @@ def get_audio_tracks(filepath):
             if br:
                 try:
                     br_kbps = int(int(br) / 1000)
-                except:
+                except Exception:
                     br_kbps = "?"
             else:
                 br_kbps = "?"
@@ -180,10 +180,15 @@ class VideoConverter(wx.Frame):
         self.on_toggle_log(None)
         self.Show()
 
+        # --- Проверка наличия ffmpeg и ffprobe ---
         if not os.path.isfile(FFMPEG_PATH):
-            self.log.AppendText("Не найден ffmpeg.exe!\n")
+            self.log.AppendText("Не найден ffmpeg.exe\n")
+            self.btn_start.Disable()
         if not os.path.isfile(FFPROBE_PATH):
-            self.log.AppendText("Не найден ffprobe.exe!\n")
+            self.log.AppendText("Не найден ffprobe.exe\n")
+            self.btn_browse.Disable()
+            self.audio_choice.Disable()
+            self.btn_start.Disable()
 
     # --- Показать/Скрыть лог ---
     def on_toggle_log(self, event):
@@ -191,7 +196,7 @@ class VideoConverter(wx.Frame):
             self.log.Hide()
             self.Layout()
             self.btn_toggle_log.SetLabel("📋 Показать лог")
-            self.SetSize(self.FromDIP(wx.Size(750, 270)))
+            self.SetSize(self.FromDIP(wx.Size(750, 275)))
         else:
             self.log.Show()
             self.Layout()
@@ -230,7 +235,7 @@ class VideoConverter(wx.Frame):
             )
             self.duration = float(dur.stdout.strip())
             self.log.AppendText(f"Длительность: {self.duration:.1f} сек\n")
-        except:
+        except Exception:
             self.duration = 0
 
     # --- Конвертация ---
@@ -266,7 +271,7 @@ class VideoConverter(wx.Frame):
                 text=True,
             )
             ch = int(info.stdout.strip()) if info.stdout.strip() else 2
-        except:
+        except Exception:
             ch = 2
 
         bitrate = get_audio_bitrate(ch)
