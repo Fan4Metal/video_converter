@@ -1,0 +1,9 @@
+[project]
+name = "video-converter"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "wxpython>=4.2.4",
+]

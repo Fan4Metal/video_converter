@@ -1,0 +1,27 @@
+version = 1
+revision = 3
+requires-python = ">=3.14"
+
+[[package]]
+name = "video-converter"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "wxpython" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "wxpython", specifier = ">=4.2.4" }]
+
+[[package]]
+name = "wxpython"
+version = "4.2.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/80/6e/b70e6dbdd7cb4f154b7ca424b4c7799f7b067f7a9f4204b8d16d6464648f/wxpython-4.2.4.tar.gz", hash = "sha256:2eb123979c87bcb329e8a2452269d60ff8f9f651e9bf25c67579e53c4ebbae3c", size = 58583054, upload-time = "2025-10-29T13:22:37.726Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/a4/4af3229c6629a6469f6a6f3a2cf060d0259c171bc446991e374717115c32/wxpython-4.2.4-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:20bdd73d51c4fcc9f026a059d95654aaf68540562faf23340a2224fdfa319798", size = 18783337, upload-time = "2025-10-29T04:02:41.328Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/8f/5f1ac8e0d681cf3396acd49ce762b334f3fb754b54d96d5386e17e174eb4/wxpython-4.2.4-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:4842f9639869e455a032ef7471d974c0c8c8b7d9ba73327982d84b9d96537a08", size = 17845443, upload-time = "2025-10-29T04:02:43.551Z" },
+    { url = "https://files.pythonhosted.org/packages/72/6e/62f3c7c2f509057888ad87d141c4c77d375cfb8e4ac820654d3b972b529f/wxpython-4.2.4-cp314-cp314-win32.whl", hash = "sha256:7e7c3baa2aab55f1c0a14fdd1b371f8ec0cff1cc2f6171497643f977b243f750", size = 14848210, upload-time = "2025-10-29T04:02:45.812Z" },
+    { url = "https://files.pythonhosted.org/packages/27/e0/6d6762d2857963abc06f56fc14a605d1c69d83b0abf3a0702fcffb78bf3a/wxpython-4.2.4-cp314-cp314-win_amd64.whl", hash = "sha256:dae6d80067f64498e530d2c5f47c81f5f1a6f32e820b3b59f05062c1629ff97d", size = 16918656, upload-time = "2025-10-29T04:02:48.273Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/2d/d437e56efe7e1ec5bb7af59d6651913e18e3fa9ecdacdec7a129d5285baa/wxpython-4.2.4-cp314-cp314-win_arm64.whl", hash = "sha256:f7b649542969c2221d2963695de11c74c12060e83d412f4017ba03e7787c9c5d", size = 15807097, upload-time = "2025-10-29T04:02:51.066Z" },
+]

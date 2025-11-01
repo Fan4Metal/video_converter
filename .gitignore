@@ -1,0 +1,8 @@
+*
+!.gitignore
+!main.py
+!requirements.txt
+!images/*
+!pyproject.toml
+!README.md
+!uv.lock
