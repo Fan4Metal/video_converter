@@ -11,6 +11,8 @@ import wx
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
+__VERSION__ = "0.1.0"
+
 
 def get_resource_path(relative_path):
     """
@@ -107,7 +109,7 @@ class VideoConverter(wx.Frame):
     def __init__(self):
         super().__init__(
             None,
-            title="🎬 Video Converter (NVENC + AAC)",
+            title=f"🎬 Video Converter (NVENC + AAC) {__VERSION__}",
             style=(wx.DEFAULT_FRAME_STYLE | wx.WANTS_CHARS) & ~(wx.RESIZE_BORDER | wx.MAXIMIZE_BOX),
         )
         panel = wx.Panel(self)
