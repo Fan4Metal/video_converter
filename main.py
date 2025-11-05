@@ -201,7 +201,7 @@ def get_hdr_info(file_path: str) -> dict:
         elif "arib-std-b67" in color_transfer.lower() or "hlg" in color_transfer.lower():
             result["is_hdr"] = True
             result["type"] = "HLG"
-            result["requires_tonemap"] = True
+            result["requires_tonemap"] = False
         elif "bt2020" in color_primaries.lower():
             result["is_hdr"] = True
             result["type"] = "BT.2020 SDR"
@@ -379,11 +379,17 @@ class VideoConverter(wx.Frame):
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
         self.chk_limit_res.SetValue(True)
+        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, 20)
+
+        # Тонмаппинг: авто / вкл / выкл
+        options_box.Add(wx.StaticText(panel, label="Тонмаппинг:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
+        self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
+        options_box.Add(self.choice_tonemap, 0, wx.RIGHT, 20)
 
         self.chk_debug = wx.CheckBox(panel, label="Debug (показывать вывод ffmpeg)")
         self.chk_debug.SetValue(False)
 
-        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, 20)
         options_box.Add(self.chk_debug, 0)
 
         vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
@@ -567,8 +573,19 @@ class VideoConverter(wx.Frame):
         # --- Проверка HDR / SDR ---
         hdr_info = get_hdr_info(self.input_file)
         hdr_type = hdr_info["type"]
-        requires_tonemap = hdr_info["requires_tonemap"]
-        wx.CallAfter(self.log.AppendText, f"🎨 Тип видео: {hdr_type} | Тонмаппинг: {'включён' if requires_tonemap else 'не требуется'}\n")
+        auto_tonemap = hdr_info["requires_tonemap"]
+
+        tonemap_mode = self.choice_tonemap.GetSelection()  # 0=Авто, 1=Вкл, 2=Выкл
+        if tonemap_mode == 2:
+            needs_tonemap = False
+        elif tonemap_mode == 1:
+            needs_tonemap = True
+        else:  # Авто
+            needs_tonemap = auto_tonemap
+
+        wx.CallAfter(
+            self.log.AppendText, f"🎨Тип видео: {hdr_type} | Тонмаппинг: {'включён' if needs_tonemap else 'не требуется/выключён'}\n"
+        )
 
         # --- Проверяем, нужно ли масштабировать ---
         scale_filter = ""
@@ -601,7 +618,8 @@ class VideoConverter(wx.Frame):
             wx.CallAfter(self.log.AppendText, "📐 Масштабирование: отключено пользователем\n")
 
         # --- Видео фильтр ---
-        if requires_tonemap:
+        if needs_tonemap:
+            print("needs_tonemap")
             vf_filter = (
                 "zscale=t=linear:npl=30,format=gbrpf32le,"
                 "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
@@ -609,6 +627,7 @@ class VideoConverter(wx.Frame):
                 f"{scale_filter}"
             )
         else:
+            print("no needs_tonemap")
             vf_filter = f"format=yuv420p{scale_filter}"
 
         # --- Определяем режим кодирования ---
