@@ -104,6 +104,215 @@ def get_audio_tracks(filepath):
         return []
 
 
+def get_hdr_info(file_path: str) -> dict:
+    """
+    Определяет HDR тип видео: HDR10, HDR10+, HLG, Dolby Vision и т.п.
+    Возвращает подробную структуру:
+    {
+        "is_hdr": True/False,
+        "type": "HDR10 / Dolby Vision / SDR / HDR10+ / HLG",
+        "requires_tonemap": True/False,
+        "pix_fmt": "yuv420p10le",
+        "color_transfer": "...",
+        "color_primaries": "...",
+        "color_space": "...",
+        "dolby_profile": "5" (если найден)
+    }
+    """
+    result = {
+        "is_hdr": False,
+        "type": "SDR",
+        "requires_tonemap": False,
+        "pix_fmt": "?",
+        "color_transfer": "?",
+        "color_primaries": "?",
+        "color_space": "?",
+        "dolby_profile": None,
+    }
+
+    try:
+        # ffprobe JSON
+        cmd = [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream_tags",
+            file_path,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(proc.stdout)
+
+        if not data.get("streams"):
+            return result
+
+        stream = data["streams"][0]
+        tags = stream.get("tags", {})
+
+        color_primaries = stream.get("color_primaries", "")
+        color_transfer = stream.get("color_transfer", "")
+        color_space = stream.get("color_space", "")
+        pix_fmt = stream.get("pix_fmt", "")
+
+        result.update(
+            {
+                "color_primaries": color_primaries,
+                "color_transfer": color_transfer,
+                "color_space": color_space,
+                "pix_fmt": pix_fmt,
+            }
+        )
+
+        # --- Dolby Vision detection ---
+        dv_profile = None
+        for key, value in tags.items():
+            if "dolby" in key.lower() or "dv" in key.lower():
+                if "profile" in value.lower() or value.isdigit():
+                    dv_profile = value
+                    break
+        if "dv_profile" in stream:
+            dv_profile = stream["dv_profile"]
+
+        if dv_profile:
+            result["is_hdr"] = True
+            result["type"] = f"Dolby Vision (P{dv_profile})"
+            result["dolby_profile"] = dv_profile
+            result["requires_tonemap"] = True
+            return result
+
+        # --- HDR10+ detection ---
+        side_data = stream.get("side_data_list", [])
+        if any("HDR10Plus" in str(d) for d in side_data):
+            result["is_hdr"] = True
+            result["type"] = "HDR10+"
+            result["requires_tonemap"] = True
+            return result
+
+        # --- HDR10 / PQ / HLG detection ---
+        if "smpte2084" in color_transfer.lower():
+            result["is_hdr"] = True
+            result["type"] = "HDR10 / PQ"
+            result["requires_tonemap"] = True
+        elif "arib-std-b67" in color_transfer.lower() or "hlg" in color_transfer.lower():
+            result["is_hdr"] = True
+            result["type"] = "HLG"
+            result["requires_tonemap"] = True
+        elif "bt2020" in color_primaries.lower():
+            result["is_hdr"] = True
+            result["type"] = "BT.2020 SDR"
+            result["requires_tonemap"] = False
+        else:
+            result["is_hdr"] = False
+            result["type"] = "SDR"
+            result["requires_tonemap"] = False
+
+    except Exception as e:
+        print(f"⚠ Ошибка анализа HDR: {e}")
+
+    return result
+
+
+def get_video_info(filepath: str) -> dict:
+    """
+    Извлекает информацию о видеофайле (кодек, разрешение, FPS, битрейт, HDR и т.д.)
+    через ffprobe и возвращает словарь с параметрами.
+    """
+    info = {
+        "codec": "?",
+        "width": "?",
+        "height": "?",
+        "fps": "?",
+        "aspect": "?",
+        "bitrate": "?",
+        "hdr_type": "?",
+        "duration": 0.0,
+    }
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                (
+                    "stream=codec_name,width,height,r_frame_rate,bit_rate,"
+                    "display_aspect_ratio,color_space,color_transfer,color_primaries:"
+                    "format=duration,bit_rate"
+                ),
+                "-of",
+                "json",
+                filepath,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        data = json.loads(result.stdout)
+        stream = data.get("streams", [{}])[0] if data.get("streams") else {}
+        fmt = data.get("format", {})
+
+        info["codec"] = stream.get("codec_name", "?")
+        info["width"] = stream.get("width", "?")
+        info["height"] = stream.get("height", "?")
+
+        # --- FPS ---
+        fps_raw = stream.get("r_frame_rate", "0/0")
+        try:
+            num, den = fps_raw.split("/")
+            info["fps"] = round(float(num) / float(den), 2) if float(den) != 0 else "?"
+        except:
+            info["fps"] = "?"
+
+        # --- Битрейт ---
+        bitrate = stream.get("bit_rate") or fmt.get("bit_rate")
+        if bitrate:
+            try:
+                info["bitrate"] = f"{int(bitrate) / 1_000_000:.2f} Мбит/с"
+            except:
+                info["bitrate"] = "?"
+        else:
+            info["bitrate"] = "?"
+
+        # --- Соотношение сторон ---
+        info["aspect"] = stream.get("display_aspect_ratio", "?")
+
+        # --- Длительность ---
+        try:
+            info["duration"] = float(fmt.get("duration", 0))
+        except:
+            info["duration"] = 0.0
+
+        # --- Определяем HDR тип ---
+        color_trc = stream.get("color_transfer", "")
+        if color_trc:
+            if "smpte2084" in color_trc:
+                info["hdr_type"] = "HDR10 / PQ"
+            elif "arib-std-b67" in color_trc:
+                info["hdr_type"] = "HLG"
+            elif "bt2020" in color_trc:
+                info["hdr_type"] = "BT.2020 SDR"
+            else:
+                info["hdr_type"] = color_trc
+        else:
+            info["hdr_type"] = "SDR"
+
+        hdr_info = get_hdr_info(filepath)
+        info["hdr_type"] = hdr_info["type"]
+        info["requires_tonemap"] = hdr_info["requires_tonemap"]
+
+    except Exception as e:
+        print(f"⚠ Ошибка получения данных через ffprobe: {e}")
+
+    return info
+
+
 # --- Основное окно приложения ---
 class VideoConverter(wx.Frame):
     def __init__(self):
@@ -141,12 +350,28 @@ class VideoConverter(wx.Frame):
         vbox.Add(wx.StaticText(panel, label="Аудио дорожка:"), 0, wx.LEFT | wx.TOP, 8)
         vbox.Add(self.audio_choice, 0, wx.EXPAND | wx.ALL, 5)
 
-        # --- Слайдер качества ---
-        vbox.Add(wx.StaticText(panel, label="Качество (QP, меньше = лучше):"), 0, wx.LEFT | wx.TOP, 8)
+        # --- Режим кодирования (в одной строке) ---
+        self.encode_mode = wx.RadioBox(
+            panel,
+            label="Режим кодирования",
+            choices=["🎯 Постоянное качество (QP)", "📦 Постоянный битрейт (CBR)"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,  # расположение в одну строку
+        )
+        self.encode_mode.SetSelection(0)
+        self.encode_mode.Bind(wx.EVT_RADIOBOX, self.on_mode_change)
+        vbox.Add(self.encode_mode, 0, wx.EXPAND | wx.ALL, 5)
+
+        # --- Слайдер качества / битрейта ---
+        self.slider_label = wx.StaticText(panel, label="Качество (QP, меньше = лучше):")
+        vbox.Add(self.slider_label, 0, wx.LEFT | wx.TOP, 8)
+
         self.qp_slider = wx.Slider(panel, minValue=14, maxValue=30, value=22, style=wx.SL_HORIZONTAL)
         vbox.Add(self.qp_slider, 0, wx.EXPAND | wx.ALL, 5)
+
         self.qp_label = wx.StaticText(panel, label="QP = 22")
         vbox.Add(self.qp_label, 0, wx.LEFT, 12)
+
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
         # --- Дополнительные опции ---
@@ -173,7 +398,7 @@ class VideoConverter(wx.Frame):
         vbox.Add(btn_box, 0, wx.EXPAND)
 
         # --- Прогресс ---
-        self.progress = wx.Gauge(panel, range=100, size=(-1, 25))
+        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)))
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, 5)
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
         vbox.Add(self.progress_label, 0, wx.LEFT, 12)
@@ -190,10 +415,9 @@ class VideoConverter(wx.Frame):
         self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
-        self.SetSize(self.FromDIP(wx.Size(750, 580)))
-        self.SetMinSize(self.FromDIP(wx.Size(750, 269)))
+        self.SetSize(self.FromDIP(wx.Size(750, 620)))
         self.Centre()
-        self.on_toggle_log(None)
+        # self.on_toggle_log(None)
         self.Show()
 
         # --- Проверка наличия ffmpeg и ffprobe ---
@@ -206,24 +430,44 @@ class VideoConverter(wx.Frame):
             self.audio_choice.Disable()
             self.btn_start.Disable()
 
+    def on_mode_change(self, event):
+        """Переключает слайдер между режимами QP и CBR"""
+        mode = self.encode_mode.GetSelection()
+        if mode == 0:  # QP
+            self.slider_label.SetLabel("Качество (QP, меньше = лучше):")
+            self.qp_slider.SetRange(14, 30)
+            self.qp_slider.SetValue(22)
+            self.qp_label.SetLabel("QP = 22")
+        else:  # CBR
+            self.slider_label.SetLabel("Битрейт (Мбит/с):")
+            self.qp_slider.SetRange(2, 25)  # битрейт от 2 до 25 Мбит/с
+            self.qp_slider.SetValue(8)
+            self.qp_label.SetLabel("Битрейт = 8.0 Мбит/с")
+
     # --- Показать/Скрыть лог ---
     def on_toggle_log(self, event):
         if self.log_visible:
             self.log.Hide()
             self.Layout()
             self.btn_toggle_log.SetLabel("📋 Показать лог")
-            self.SetSize(self.FromDIP(wx.Size(750, 275)))
+            self.SetSize(self.FromDIP(wx.Size(750, 365)))
         else:
             self.log.Show()
             self.Layout()
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
-            self.SetSize(self.FromDIP(wx.Size(750, 580)))
+            self.SetSize(self.FromDIP(wx.Size(750, 620)))
         self.log_visible = not self.log_visible
 
     # --- Обновление QP ---
     def on_qp_change(self, event):
-        self.qp_value = self.qp_slider.GetValue()
-        self.qp_label.SetLabel(f"QP = {self.qp_value}")
+        mode = self.encode_mode.GetSelection()
+        val = self.qp_slider.GetValue()
+        if mode == 0:
+            self.qp_value = val
+            self.qp_label.SetLabel(f"QP = {val}")
+        else:
+            self.bitrate_value = val
+            self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
 
     # --- Выбор файла ---
     def on_browse(self, event):
@@ -237,22 +481,29 @@ class VideoConverter(wx.Frame):
     def set_input_file(self, path):
         self.input_file = path
         self.file_txt.SetValue(path)
-        self.log.AppendText(f"Выбран файл: {path}\n")
+        self.log.AppendText(f"{'-' * 30}\nВыбран файл: {path}\n")
 
+        # --- Аудио дорожки ---
         tracks = get_audio_tracks(path)
         self.audio_tracks = tracks
         self.audio_choice.Set(tracks)
         if tracks:
             self.audio_choice.SetSelection(0)
 
-        try:
-            dur = subprocess.run(
-                [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path], capture_output=True, text=True
-            )
-            self.duration = float(dur.stdout.strip())
-            self.log.AppendText(f"Длительность: {self.duration:.1f} сек\n")
-        except Exception:
-            self.duration = 0
+        # --- Видеоинформация ---
+        info = get_video_info(path)
+        self.duration = info.get("duration", 0)
+
+        self.log.AppendText(
+            "🎞 Видео:\n"
+            f"  Кодек: {info['codec']}\n"
+            f"  Разрешение: {info['width']}×{info['height']}\n"
+            f"  FPS: {info['fps']}\n"
+            f"  Соотношение сторон: {info['aspect']}\n"
+            f"  Битрейт: {info['bitrate']}\n"
+            f"  Тип: {info['hdr_type']}\n"
+            f"  Длительность: {info['duration']:.1f} сек\n"
+        )
 
     # --- Конвертация ---
     def on_convert(self, event):
@@ -286,11 +537,11 @@ class VideoConverter(wx.Frame):
                 capture_output=True,
                 text=True,
             )
-            ch = int(info.stdout.strip()) if info.stdout.strip() else 2
+            self.ch = int(info.stdout.strip()) if info.stdout.strip() else 2
         except Exception:
-            ch = 2
+            self.ch = 2
 
-        bitrate = get_audio_bitrate(ch)
+        bitrate = get_audio_bitrate(self.ch)
         self.output_file = os.path.splitext(self.input_file)[0] + "_conv.mp4"
 
         if os.path.exists(self.output_file):
@@ -302,7 +553,7 @@ class VideoConverter(wx.Frame):
 
         self.converting = True
         self.btn_start.SetLabel("⏹ Отмена")
-        self.log.AppendText(f"\n🎬 Конвертация...\nКаналов: {ch} → {bitrate}, QP: {self.qp_value}\n")
+        self.log.AppendText(f"\n🎬 Конвертация...\nКаналов: {self.ch} → битрейт {bitrate}\n")
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
 
@@ -312,6 +563,65 @@ class VideoConverter(wx.Frame):
     # --- Основная конвертация ---
     def run_ffmpeg_with_progress(self, bitrate):
         audio_index = self.selected_track
+
+        # --- Проверка HDR / SDR ---
+        hdr_info = get_hdr_info(self.input_file)
+        hdr_type = hdr_info["type"]
+        requires_tonemap = hdr_info["requires_tonemap"]
+        wx.CallAfter(self.log.AppendText, f"🎨 Тип видео: {hdr_type} | Тонмаппинг: {'включён' if requires_tonemap else 'не требуется'}\n")
+
+        # --- Проверяем, нужно ли масштабировать ---
+        scale_filter = ""
+        if self.chk_limit_res.GetValue():  # если включено в GUI
+            video_info = get_video_info(self.input_file)
+            width = int(video_info.get("width") or 0)
+            height = int(video_info.get("height") or 0)
+
+            if width > 1920 or height > 1080:
+                # Вычисляем новое разрешение, сохраняя пропорции
+                aspect_ratio = width / height if height else 1
+                new_w, new_h = width, height
+
+                if width / 1920 >= height / 1080:
+                    # Ограничение по ширине
+                    new_w = 1920
+                    new_h = int(1920 / aspect_ratio)
+                else:
+                    # Ограничение по высоте
+                    new_h = 1080
+                    new_w = int(1080 * aspect_ratio)
+
+                # FFmpeg фильтр
+                scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
+
+                wx.CallAfter(self.log.AppendText, f"📐 Масштабирование: {width}×{height} → {new_w}×{new_h}\n")
+            else:
+                wx.CallAfter(self.log.AppendText, f"📐 Масштабирование не требуется ({width}×{height})\n")
+        else:
+            wx.CallAfter(self.log.AppendText, "📐 Масштабирование: отключено пользователем\n")
+
+        # --- Видео фильтр ---
+        if requires_tonemap:
+            vf_filter = (
+                "zscale=t=linear:npl=30,format=gbrpf32le,"
+                "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
+                "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
+                f"{scale_filter}"
+            )
+        else:
+            vf_filter = f"format=yuv420p{scale_filter}"
+
+        # --- Определяем режим кодирования ---
+        mode = self.encode_mode.GetSelection()
+        if mode == 0:  # Постоянное качество
+            video_codec_args = ["-qp", str(self.qp_value), "-b:v", "0"]
+            wx.CallAfter(self.log.AppendText, f"🎯 Режим: постоянное качество (QP={self.qp_value})\n")
+        else:  # Постоянный битрейт
+            target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
+            video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+            wx.CallAfter(self.log.AppendText, f"📦 Режим: постоянный битрейт ({target_bitrate})\n")
+
+        # --- Команда FFmpeg ---
         cmd = [
             FFMPEG_PATH,
             "-hide_banner",
@@ -326,12 +636,11 @@ class VideoConverter(wx.Frame):
             "h264_nvenc",
             "-pix_fmt",
             "yuv420p",
+            "-vf",
+            vf_filter,
             "-preset",
             "p4",
-            "-qp",
-            str(self.qp_value),
-            "-b:v",
-            "0",
+            *video_codec_args,
             "-profile:v",
             "high",
             "-tune",
@@ -342,14 +651,27 @@ class VideoConverter(wx.Frame):
             "1",
             "-c:a",
             "aac",
+            "-ac",
+            str(self.ch),
             "-b:a",
             bitrate,
-            "-movflags",
-            "+faststart",
+            "-map_metadata",
+            "-1",
+            "-sn",
+            # "-movflags",
+            # "+faststart",
             self.output_file,
         ]
 
-        self.process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, universal_newlines=True)
+        self.process = subprocess.Popen(
+            cmd,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            universal_newlines=True,
+            encoding="utf-8",
+            errors="replace",
+        )
 
         total_duration = self.duration or 1
         time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -455,13 +777,11 @@ class VideoConverter(wx.Frame):
         self.Destroy()
 
     def disable_interface(self):
-        print("disable_interface")
         self.btn_browse.Disable()
         self.qp_slider.Disable()
         self.audio_choice.Disable()
 
     def enable_interface(self):
-        print("enable_interface")
         self.btn_browse.Enable()
         self.qp_slider.Enable()
         self.audio_choice.Enable()
