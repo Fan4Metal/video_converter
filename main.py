@@ -66,6 +66,7 @@ def get_audio_tracks(filepath):
             capture_output=True,
             text=True,
             check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         data = json.loads(result.stdout)
         tracks = []
@@ -145,7 +146,7 @@ def get_hdr_info(file_path: str) -> dict:
             "stream_tags",
             file_path,
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
         data = json.loads(proc.stdout)
 
         if not data.get("streams"):
@@ -253,6 +254,7 @@ def get_video_info(filepath: str) -> dict:
             ],
             capture_output=True,
             text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         data = json.loads(result.stdout)
         stream = data.get("streams", [{}])[0] if data.get("streams") else {}
@@ -543,6 +545,7 @@ class VideoConverter(wx.Frame):
                 ],
                 capture_output=True,
                 text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self.ch = int(info.stdout.strip()) if info.stdout.strip() else 2
         except Exception:
@@ -691,6 +694,7 @@ class VideoConverter(wx.Frame):
             universal_newlines=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
 
         total_duration = self.duration or 1
