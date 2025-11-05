@@ -318,7 +318,7 @@ class VideoConverter(wx.Frame):
     def __init__(self):
         super().__init__(
             None,
-            title=f"🎬 Video Converter (NVENC + AAC) {__VERSION__}",
+            title=f"Video Converter (NVENC + AAC) {__VERSION__}",
             style=(wx.DEFAULT_FRAME_STYLE | wx.WANTS_CHARS) & ~(wx.RESIZE_BORDER | wx.MAXIMIZE_BOX),
         )
         panel = wx.Panel(self)
@@ -421,9 +421,10 @@ class VideoConverter(wx.Frame):
         self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
+        self.SetIcon(wx.Icon(get_resource_path("./images/favicon.png")))
         self.SetSize(self.FromDIP(wx.Size(750, 620)))
         self.Centre()
-        # self.on_toggle_log(None)
+        self.on_toggle_log(None)
         self.Show()
 
         # --- Проверка наличия ffmpeg и ffprobe ---

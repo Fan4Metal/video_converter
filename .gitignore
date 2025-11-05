@@ -2,7 +2,8 @@
 !.gitignore
 !main.py
 !requirements.txt
-!images/*
+!images/
+!images/**
 !pyproject.toml
 !README.md
 !uv.lock
