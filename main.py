@@ -147,6 +147,20 @@ class VideoConverter(wx.Frame):
         vbox.Add(self.qp_label, 0, wx.LEFT, 12)
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
+        # --- Дополнительные опции ---
+        options_box = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
+        self.chk_limit_res.SetValue(True)
+
+        self.chk_debug = wx.CheckBox(panel, label="Debug (показывать вывод ffmpeg)")
+        self.chk_debug.SetValue(False)
+
+        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, 20)
+        options_box.Add(self.chk_debug, 0)
+
+        vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
+
         # --- Кнопки управления ---
         btn_box = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
@@ -345,6 +359,16 @@ class VideoConverter(wx.Frame):
         current_fps = "?"
 
         for line in self.process.stderr:
+            # показываем каждую строку из stderr в логе
+            if self.chk_debug.GetValue():
+                autoscroll = self.log.HasFocus()
+                if autoscroll:
+                    wx.CallAfter(self.log.AppendText, line)
+                else:
+                    self.log.GetParent().Freeze()
+                    wx.CallAfter(self.log.AppendText, line)
+                    self.log.GetParent().Thaw()
+
             if self.process.poll() is not None:
                 break
             match = time_regex.search(line)
@@ -362,15 +386,6 @@ class VideoConverter(wx.Frame):
                 fps_match = fps_regex.search(line)
                 if fps_match:
                     current_fps = fps_match.group(1)
-
-                if "frame=" in line:
-                    autoscroll = self.log.HasFocus()
-                    if autoscroll:
-                        wx.CallAfter(self.log.AppendText, line)
-                    else:
-                        self.log.GetParent().Freeze()
-                        wx.CallAfter(self.log.AppendText, line)
-                        self.log.GetParent().Thaw()
 
                 elapsed_time_match = time_elapsed_regex.search(line)
                 if elapsed_time_match:
