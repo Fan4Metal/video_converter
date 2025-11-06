@@ -269,7 +269,7 @@ def get_video_info(filepath: str) -> dict:
         try:
             num, den = fps_raw.split("/")
             info["fps"] = round(float(num) / float(den), 2) if float(den) != 0 else "?"
-        except:
+        except Exception:
             info["fps"] = "?"
 
         # --- Битрейт ---
@@ -277,7 +277,7 @@ def get_video_info(filepath: str) -> dict:
         if bitrate:
             try:
                 info["bitrate"] = f"{int(bitrate) / 1_000_000:.2f} Мбит/с"
-            except:
+            except Exception:
                 info["bitrate"] = "?"
         else:
             info["bitrate"] = "?"
@@ -288,7 +288,7 @@ def get_video_info(filepath: str) -> dict:
         # --- Длительность ---
         try:
             info["duration"] = float(fmt.get("duration", 0))
-        except:
+        except Exception:
             info["duration"] = 0.0
 
         # --- Определяем HDR тип ---
@@ -488,7 +488,10 @@ class VideoConverter(wx.Frame):
     # --- Выбор файла ---
     def on_browse(self, event):
         with wx.FileDialog(
-            self, "Выбери видеофайл", wildcard="Видео файлы (*.mkv;*.mp4;*.mov)|*.mkv;*.mp4;*.mov", style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+            self,
+            "Выбери видеофайл",
+            wildcard="Видео файлы (*.mkv;*.mp4;*.mov;*.avi)|*.mkv;*.mp4;*.mov;*.avi",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         ) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
                 self.set_input_file(dlg.GetPath())
@@ -511,14 +514,14 @@ class VideoConverter(wx.Frame):
         self.duration = info.get("duration", 0)
 
         self.log.AppendText(
-            "🎞 Видео:\n"
-            f"  Кодек: {info['codec']}\n"
-            f"  Разрешение: {info['width']}×{info['height']}\n"
-            f"  FPS: {info['fps']}\n"
-            f"  Соотношение сторон: {info['aspect']}\n"
-            f"  Битрейт: {info['bitrate']}\n"
-            f"  Тип: {info['hdr_type']}\n"
-            f"  Длительность: {info['duration']:.1f} сек\n"
+            "🎥 Видео:\n"
+            f"🔹Кодек: {info['codec']}\n"
+            f"🔹Разрешение: {info['width']}×{info['height']}\n"
+            f"🔹FPS: {info['fps']}\n"
+            f"🔹Соотношение сторон: {info['aspect']}\n"
+            f"🔹Битрейт: {info['bitrate']}\n"
+            f"🔹Тип: {info['hdr_type']}\n"
+            f"🔹Длительность: {info['duration']:.1f} сек\n"
         )
 
     # --- Конвертация ---
@@ -547,14 +550,14 @@ class VideoConverter(wx.Frame):
                     "-show_entries",
                     "stream=channels",
                     "-of",
-                    "csv=p=0",
+                    "json",
                     self.input_file,
                 ],
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            self.ch = int(info.stdout.strip()) if info.stdout.strip() else 2
+            self.ch = json.loads(info.stdout).get("streams", [{}])[0].get("channels", 2)
         except Exception:
             self.ch = 2
 
@@ -570,7 +573,7 @@ class VideoConverter(wx.Frame):
 
         self.converting = True
         self.btn_start.SetLabel("⏹ Отмена")
-        self.log.AppendText(f"\n🎬 Конвертация...\nКаналов: {self.ch} → битрейт {bitrate}\n")
+        self.log.AppendText(f"\n🎬 Конвертация...\n🎵 Аудио каналов: {self.ch} → битрейт {bitrate}\n")
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
 
