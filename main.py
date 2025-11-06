@@ -343,14 +343,14 @@ class VideoConverter(wx.Frame):
         file_box = wx.BoxSizer(wx.HORIZONTAL)
         self.file_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
         self.btn_browse = wx.Button(panel, label="Выбрать файл...")
-        file_box.Add(self.file_txt, 1, wx.ALL | wx.EXPAND, 5)
-        file_box.Add(self.btn_browse, 0, wx.ALL, 5)
+        file_box.Add(self.file_txt, 1, wx.ALL | wx.EXPAND, self.FromDIP(5))
+        file_box.Add(self.btn_browse, 0, wx.ALL, self.FromDIP(5))
         vbox.Add(file_box, 0, wx.EXPAND)
 
         # --- Аудио дорожка ---
         self.audio_choice = wx.Choice(panel, choices=[])
-        vbox.Add(wx.StaticText(panel, label="Аудио дорожка:"), 0, wx.LEFT | wx.TOP, 8)
-        vbox.Add(self.audio_choice, 0, wx.EXPAND | wx.ALL, 5)
+        vbox.Add(wx.StaticText(panel, label="Аудио дорожка:"), 0, wx.LEFT | wx.TOP, self.FromDIP(8))
+        vbox.Add(self.audio_choice, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
         # --- Режим кодирования (в одной строке) ---
         self.encode_mode = wx.RadioBox(
@@ -362,17 +362,17 @@ class VideoConverter(wx.Frame):
         )
         self.encode_mode.SetSelection(0)
         self.encode_mode.Bind(wx.EVT_RADIOBOX, self.on_mode_change)
-        vbox.Add(self.encode_mode, 0, wx.EXPAND | wx.ALL, 5)
+        vbox.Add(self.encode_mode, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
         # --- Слайдер качества / битрейта ---
         self.slider_label = wx.StaticText(panel, label="Качество (QP, меньше = лучше):")
-        vbox.Add(self.slider_label, 0, wx.LEFT | wx.TOP, 8)
+        vbox.Add(self.slider_label, 0, wx.LEFT | wx.TOP, self.FromDIP(8))
 
         self.qp_slider = wx.Slider(panel, minValue=14, maxValue=30, value=22, style=wx.SL_HORIZONTAL)
-        vbox.Add(self.qp_slider, 0, wx.EXPAND | wx.ALL, 5)
+        vbox.Add(self.qp_slider, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
         self.qp_label = wx.StaticText(panel, label="QP = 22")
-        vbox.Add(self.qp_label, 0, wx.LEFT, 12)
+        vbox.Add(self.qp_label, 0, wx.LEFT, self.FromDIP(12))
 
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
@@ -381,39 +381,39 @@ class VideoConverter(wx.Frame):
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
         self.chk_limit_res.SetValue(True)
-        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, 20)
+        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, self.FromDIP(20))
 
         # Тонмаппинг: авто / вкл / выкл
-        options_box.Add(wx.StaticText(panel, label="Тонмаппинг:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        options_box.Add(wx.StaticText(panel, label="Тонмаппинг:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
         self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
-        options_box.Add(self.choice_tonemap, 0, wx.RIGHT, 20)
+        options_box.Add(self.choice_tonemap, 0, wx.RIGHT, self.FromDIP(20))
 
         self.chk_debug = wx.CheckBox(panel, label="Debug (показывать вывод ffmpeg)")
         self.chk_debug.SetValue(False)
 
         options_box.Add(self.chk_debug, 0)
 
-        vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
+        vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, self.FromDIP(10))
 
         # --- Кнопки управления ---
         btn_box = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
         self.btn_toggle_log = wx.Button(panel, label="📋 Скрыть лог", size=self.FromDIP(wx.Size(100, 25)))
         self.btn_toggle_log.SetToolTip("Показать/Скрыть лог")
-        btn_box.Add(self.btn_start, 1, wx.ALL | wx.EXPAND, 5)
-        btn_box.Add(self.btn_toggle_log, 0, wx.ALL, 5)
+        btn_box.Add(self.btn_start, 1, wx.ALL | wx.EXPAND, self.FromDIP(5))
+        btn_box.Add(self.btn_toggle_log, 0, wx.ALL, self.FromDIP(5))
         vbox.Add(btn_box, 0, wx.EXPAND)
 
         # --- Прогресс ---
         self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)))
-        vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, 5)
+        vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
-        vbox.Add(self.progress_label, 0, wx.LEFT, 12)
+        vbox.Add(self.progress_label, 0, wx.LEFT, self.FromDIP(12))
 
         # --- Лог ---
         self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
-        vbox.Add(self.log, 1, wx.EXPAND | wx.ALL, 5)
+        vbox.Add(self.log, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
         panel.SetSizer(vbox)
 
@@ -457,14 +457,14 @@ class VideoConverter(wx.Frame):
     def on_toggle_log(self, event):
         if self.log_visible:
             self.log.Hide()
-            self.Layout()
             self.btn_toggle_log.SetLabel("📋 Показать лог")
-            self.SetSize(self.FromDIP(wx.Size(750, 365)))
+            self.SetSize(self.FromDIP(wx.Size(750, 400)))
+            self.Layout()
         else:
             self.log.Show()
-            self.Layout()
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
             self.SetSize(self.FromDIP(wx.Size(750, 620)))
+            self.Layout()
         self.log_visible = not self.log_visible
 
     # --- Обновление QP ---
