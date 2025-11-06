@@ -254,7 +254,7 @@ def get_video_info(filepath: str) -> dict:
             ],
             capture_output=True,
             text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         data = json.loads(result.stdout)
         stream = data.get("streams", [{}])[0] if data.get("streams") else {}
@@ -381,18 +381,17 @@ class VideoConverter(wx.Frame):
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
         self.chk_limit_res.SetValue(True)
-        options_box.Add(self.chk_limit_res, 1, wx.RIGHT, self.FromDIP(20))
+        options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
 
         # Тонмаппинг: авто / вкл / выкл
-        options_box.Add(wx.StaticText(panel, label="Тонмаппинг:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+        options_box.Add(wx.StaticText(panel, label="HDR→SDR:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
         self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
-        options_box.Add(self.choice_tonemap, 0, wx.RIGHT, self.FromDIP(20))
+        options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
 
         self.chk_debug = wx.CheckBox(panel, label="Debug (показывать вывод ffmpeg)")
         self.chk_debug.SetValue(False)
-
-        options_box.Add(self.chk_debug, 0)
+        options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
 
         vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, self.FromDIP(10))
 
@@ -409,11 +408,11 @@ class VideoConverter(wx.Frame):
         self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)))
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
-        vbox.Add(self.progress_label, 0, wx.LEFT, self.FromDIP(12))
+        vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
 
         # --- Лог ---
         self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
-        vbox.Add(self.log, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
+        vbox.Add(self.log, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
         panel.SetSizer(vbox)
 
@@ -457,13 +456,13 @@ class VideoConverter(wx.Frame):
     def on_toggle_log(self, event):
         if self.log_visible:
             self.log.Hide()
-            self.btn_toggle_log.SetLabel("📋 Показать лог")
             self.SetSize(self.FromDIP(wx.Size(750, 400)))
+            self.btn_toggle_log.SetLabel("📋 Показать лог")
             self.Layout()
         else:
             self.log.Show()
-            self.btn_toggle_log.SetLabel("📋 Скрыть лог")
             self.SetSize(self.FromDIP(wx.Size(750, 620)))
+            self.btn_toggle_log.SetLabel("📋 Скрыть лог")
             self.Layout()
         self.log_visible = not self.log_visible
 
@@ -694,7 +693,7 @@ class VideoConverter(wx.Frame):
             universal_newlines=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
         total_duration = self.duration or 1
