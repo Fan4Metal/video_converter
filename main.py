@@ -11,7 +11,7 @@ import wx
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
-__VERSION__ = "0.1.0"
+__VERSION__ = "0.1.1"
 
 
 def get_resource_path(relative_path):
@@ -384,12 +384,20 @@ class VideoConverter(wx.Frame):
         options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
 
         # Тонмаппинг: авто / вкл / выкл
-        options_box.Add(wx.StaticText(panel, label="HDR→SDR:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+        self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
+        options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
         self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
         options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
 
-        self.chk_debug = wx.CheckBox(panel, label="Debug (показывать вывод ffmpeg)")
+        # Чекбокс: не перекодировать видео
+        self.chk_skip_video = wx.CheckBox(panel, label="Не перекодировать видео")
+        self.chk_skip_video.SetValue(False)
+        self.chk_skip_video.Bind(wx.EVT_CHECKBOX, self.on_skip_video)
+        options_box.Add(self.chk_skip_video, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
+
+        # Чекбокс: debug
+        self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
 
@@ -573,117 +581,146 @@ class VideoConverter(wx.Frame):
     def run_ffmpeg_with_progress(self, bitrate):
         audio_index = self.selected_track
 
-        # --- Проверка HDR / SDR ---
-        hdr_info = get_hdr_info(self.input_file)
-        hdr_type = hdr_info["type"]
-        auto_tonemap = hdr_info["requires_tonemap"]
+        if not self.chk_skip_video.GetValue():  # если не нажато перекодировать видео
+            # --- Проверка HDR / SDR ---
+            hdr_info = get_hdr_info(self.input_file)
+            hdr_type = hdr_info["type"]
+            auto_tonemap = hdr_info["requires_tonemap"]
 
-        tonemap_mode = self.choice_tonemap.GetSelection()  # 0=Авто, 1=Вкл, 2=Выкл
-        if tonemap_mode == 2:
-            needs_tonemap = False
-        elif tonemap_mode == 1:
-            needs_tonemap = True
-        else:  # Авто
-            needs_tonemap = auto_tonemap
+            tonemap_mode = self.choice_tonemap.GetSelection()  # 0=Авто, 1=Вкл, 2=Выкл
+            if tonemap_mode == 2:
+                needs_tonemap = False
+            elif tonemap_mode == 1:
+                needs_tonemap = True
+            else:  # Авто
+                needs_tonemap = auto_tonemap
 
-        wx.CallAfter(
-            self.log.AppendText, f"🎨Тип видео: {hdr_type} | Тонмаппинг: {'включён' if needs_tonemap else 'не требуется/выключён'}\n"
-        )
-
-        # --- Проверяем, нужно ли масштабировать ---
-        scale_filter = ""
-        if self.chk_limit_res.GetValue():  # если включено в GUI
-            video_info = get_video_info(self.input_file)
-            width = int(video_info.get("width") or 0)
-            height = int(video_info.get("height") or 0)
-
-            if width > 1920 or height > 1080:
-                # Вычисляем новое разрешение, сохраняя пропорции
-                aspect_ratio = width / height if height else 1
-                new_w, new_h = width, height
-
-                if width / 1920 >= height / 1080:
-                    # Ограничение по ширине
-                    new_w = 1920
-                    new_h = int(1920 / aspect_ratio)
-                else:
-                    # Ограничение по высоте
-                    new_h = 1080
-                    new_w = int(1080 * aspect_ratio)
-
-                # FFmpeg фильтр
-                scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
-
-                wx.CallAfter(self.log.AppendText, f"📐 Масштабирование: {width}×{height} → {new_w}×{new_h}\n")
-            else:
-                wx.CallAfter(self.log.AppendText, f"📐 Масштабирование не требуется ({width}×{height})\n")
-        else:
-            wx.CallAfter(self.log.AppendText, "📐 Масштабирование: отключено пользователем\n")
-
-        # --- Видео фильтр ---
-        if needs_tonemap:
-            print("needs_tonemap")
-            vf_filter = (
-                "zscale=t=linear:npl=30,format=gbrpf32le,"
-                "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
-                "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
-                f"{scale_filter}"
+            wx.CallAfter(
+                self.log.AppendText, f"🎨Тип видео: {hdr_type} | Тонмаппинг: {'включён' if needs_tonemap else 'не требуется/выключён'}\n"
             )
+
+            # --- Проверяем, нужно ли масштабировать ---
+            scale_filter = ""
+            if self.chk_limit_res.GetValue():  # если включено в GUI
+                video_info = get_video_info(self.input_file)
+                width = int(video_info.get("width") or 0)
+                height = int(video_info.get("height") or 0)
+
+                if width > 1920 or height > 1080:
+                    # Вычисляем новое разрешение, сохраняя пропорции
+                    aspect_ratio = width / height if height else 1
+                    new_w, new_h = width, height
+
+                    if width / 1920 >= height / 1080:
+                        # Ограничение по ширине
+                        new_w = 1920
+                        new_h = int(1920 / aspect_ratio)
+                    else:
+                        # Ограничение по высоте
+                        new_h = 1080
+                        new_w = int(1080 * aspect_ratio)
+
+                    # FFmpeg фильтр
+                    scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
+
+                    wx.CallAfter(self.log.AppendText, f"📐 Масштабирование: {width}×{height} → {new_w}×{new_h}\n")
+                else:
+                    wx.CallAfter(self.log.AppendText, f"📐 Масштабирование не требуется ({width}×{height})\n")
+            else:
+                wx.CallAfter(self.log.AppendText, "📐 Масштабирование: отключено пользователем\n")
+
+            # --- Видео фильтр ---
+            if needs_tonemap:
+                print("needs_tonemap")
+                vf_filter = (
+                    "zscale=t=linear:npl=30,format=gbrpf32le,"
+                    "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
+                    "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
+                    f"{scale_filter}"
+                )
+            else:
+                print("no needs_tonemap")
+                vf_filter = f"format=yuv420p{scale_filter}"
+
+            # --- Определяем режим кодирования ---
+            mode = self.encode_mode.GetSelection()
+            if mode == 0:  # Постоянное качество
+                video_codec_args = ["-qp", str(self.qp_value), "-b:v", "0"]
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: постоянное качество (QP={self.qp_value})\n")
+            else:  # Постоянный битрейт
+                target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
+                video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                wx.CallAfter(self.log.AppendText, f"📦 Режим: постоянный битрейт ({target_bitrate})\n")
+
+            # --- Команда FFmpeg ---
+            cmd = [
+                FFMPEG_PATH,
+                "-hide_banner",
+                "-y",
+                "-i",
+                self.input_file,
+                "-map",
+                "0:v:0",
+                "-map",
+                f"0:a:{audio_index}",
+                "-c:v",
+                "h264_nvenc",
+                "-pix_fmt",
+                "yuv420p",
+                "-vf",
+                vf_filter,
+                "-preset",
+                "p4",
+                *video_codec_args,
+                "-profile:v",
+                "high",
+                "-tune",
+                "hq",
+                "-spatial_aq",
+                "1",
+                "-temporal_aq",
+                "1",
+                "-c:a",
+                "aac",
+                "-ac",
+                str(self.ch),
+                "-b:a",
+                bitrate,
+                "-map_metadata",
+                "-1",
+                "-sn",
+                # "-movflags",
+                # "+faststart",
+                self.output_file,
+            ]
         else:
-            print("no needs_tonemap")
-            vf_filter = f"format=yuv420p{scale_filter}"
-
-        # --- Определяем режим кодирования ---
-        mode = self.encode_mode.GetSelection()
-        if mode == 0:  # Постоянное качество
-            video_codec_args = ["-qp", str(self.qp_value), "-b:v", "0"]
-            wx.CallAfter(self.log.AppendText, f"🎯 Режим: постоянное качество (QP={self.qp_value})\n")
-        else:  # Постоянный битрейт
-            target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
-            video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
-            wx.CallAfter(self.log.AppendText, f"📦 Режим: постоянный битрейт ({target_bitrate})\n")
-
-        # --- Команда FFmpeg ---
-        cmd = [
-            FFMPEG_PATH,
-            "-hide_banner",
-            "-y",
-            "-i",
-            self.input_file,
-            "-map",
-            "0:v:0",
-            "-map",
-            f"0:a:{audio_index}",
-            "-c:v",
-            "h264_nvenc",
-            "-pix_fmt",
-            "yuv420p",
-            "-vf",
-            vf_filter,
-            "-preset",
-            "p4",
-            *video_codec_args,
-            "-profile:v",
-            "high",
-            "-tune",
-            "hq",
-            "-spatial_aq",
-            "1",
-            "-temporal_aq",
-            "1",
-            "-c:a",
-            "aac",
-            "-ac",
-            str(self.ch),
-            "-b:a",
-            bitrate,
-            "-map_metadata",
-            "-1",
-            "-sn",
-            # "-movflags",
-            # "+faststart",
-            self.output_file,
-        ]
+            wx.CallAfter(self.log.AppendText, "🎥 Перекодирование видео: отключено пользователем\n")
+            # не конвертировать видео
+            cmd = [
+                FFMPEG_PATH,
+                "-hide_banner",
+                "-y",
+                "-i",
+                self.input_file,
+                "-map",
+                "0:v:0",
+                "-map",
+                f"0:a:{audio_index}",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-ac",
+                str(self.ch),
+                "-b:a",
+                bitrate,
+                "-map_metadata",
+                "-1",
+                "-sn",
+                # "-movflags",
+                # "+faststart",
+                self.output_file,
+            ]
 
         self.process = subprocess.Popen(
             cmd,
@@ -799,15 +836,35 @@ class VideoConverter(wx.Frame):
                 self.cancel_conversion()
         self.Destroy()
 
+    # --- Отключить интерфейс ---
     def disable_interface(self):
         self.btn_browse.Disable()
         self.qp_slider.Disable()
         self.audio_choice.Disable()
 
+    # --- Включить интерфейс ---
     def enable_interface(self):
         self.btn_browse.Enable()
         self.qp_slider.Enable()
         self.audio_choice.Enable()
+
+    # --- Блокировка интерфейса ---
+    def on_skip_video(self, event):
+        if self.chk_skip_video.GetValue():
+            self.chk_limit_res.Disable()
+            self.tonemapping_label.Disable()
+            self.choice_tonemap.Disable()
+            self.slider_label.Disable()
+            self.qp_slider.Disable()
+            self.encode_mode.Disable()
+        else:
+            self.chk_limit_res.Enable()
+            self.tonemapping_label.Enable()
+            self.choice_tonemap.Enable()
+            self.slider_label.Enable()
+            self.qp_slider.Enable()
+            self.encode_mode.Enable()
+        self.Layout()
 
 
 # --- Drag&Drop класс ---
