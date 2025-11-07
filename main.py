@@ -43,6 +43,12 @@ def get_audio_bitrate(channels: int) -> str:
     return "256k"
 
 
+def format_time(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 # --- Извлечение списка аудиодорожек ---
 def get_audio_tracks(filepath):
     def fix_encoding(text: str):
@@ -512,6 +518,7 @@ class VideoConverter(wx.Frame):
         # --- Видеоинформация ---
         info = get_video_info(path)
         self.duration = info.get("duration", 0)
+        duration_str = format_time(self.duration)
 
         self.log.AppendText(
             "🎥 Видео:\n"
@@ -521,7 +528,7 @@ class VideoConverter(wx.Frame):
             f"🔹Соотношение сторон: {info['aspect']}\n"
             f"🔹Битрейт: {info['bitrate']}\n"
             f"🔹Тип: {info['hdr_type']}\n"
-            f"🔹Длительность: {info['duration']:.1f} сек\n"
+            f"🔹Длительность: {duration_str} ({info['duration']:.1f} сек)\n"
         )
 
     # --- Конвертация ---
