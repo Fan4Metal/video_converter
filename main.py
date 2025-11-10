@@ -555,7 +555,7 @@ class VideoConverter(wx.Frame):
                     "-select_streams",
                     f"a:{self.selected_track}",
                     "-show_entries",
-                    "stream=channels",
+                    "stream=channels,codec_name",
                     "-of",
                     "json",
                     self.input_file,
@@ -565,8 +565,10 @@ class VideoConverter(wx.Frame):
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self.ch = json.loads(info.stdout).get("streams", [{}])[0].get("channels", 2)
+            self.audiocodec = json.loads(info.stdout).get("streams", [{}])[0].get("codec_name", None)
         except Exception:
             self.ch = 2
+            self.audiocodec = None
 
         bitrate = get_audio_bitrate(self.ch)
         self.output_file = os.path.splitext(self.input_file)[0] + "_conv.mp4"
@@ -580,7 +582,7 @@ class VideoConverter(wx.Frame):
 
         self.converting = True
         self.btn_start.SetLabel("⏹ Отмена")
-        self.log.AppendText(f"\n🎬 Конвертация...\n🎵 Аудио каналов: {self.ch} → битрейт {bitrate}\n")
+        self.log.AppendText(f"\n🎬 Конвертация...\n")
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
 
@@ -590,6 +592,14 @@ class VideoConverter(wx.Frame):
     # --- Основная конвертация ---
     def run_ffmpeg_with_progress(self, bitrate):
         audio_index = self.selected_track
+
+        # Определяем, нужно ли кодировать аудио. Если кодек aac, то не кодируем
+        if self.audiocodec == "aac":
+            audio_codec_args = ["-c:a", "copy"]
+            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: копирование (исходный кодек: {self.audiocodec})\n")
+        else:
+            audio_codec_args = ["-c:a", "aac", "-ac", str(self.ch), "-b:a", bitrate]
+            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: {self.audiocodec}, каналов: {self.ch}, битрейт: {bitrate}\n")
 
         if not self.chk_skip_video.GetValue():  # если не нажато перекодировать видео
             # --- Проверка HDR / SDR ---
@@ -649,7 +659,6 @@ class VideoConverter(wx.Frame):
                     f"{scale_filter}"
                 )
             else:
-                print("no needs_tonemap")
                 vf_filter = f"format=yuv420p{scale_filter}"
 
             # --- Определяем режим кодирования ---
@@ -690,12 +699,7 @@ class VideoConverter(wx.Frame):
                 "1",
                 "-temporal_aq",
                 "1",
-                "-c:a",
-                "aac",
-                "-ac",
-                str(self.ch),
-                "-b:a",
-                bitrate,
+                *audio_codec_args,
                 "-map_metadata",
                 "-1",
                 "-sn",
@@ -718,12 +722,7 @@ class VideoConverter(wx.Frame):
                 f"0:a:{audio_index}",
                 "-c:v",
                 "copy",
-                "-c:a",
-                "aac",
-                "-ac",
-                str(self.ch),
-                "-b:a",
-                bitrate,
+                *audio_codec_args,
                 "-map_metadata",
                 "-1",
                 "-sn",
