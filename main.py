@@ -11,7 +11,7 @@ import wx
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
-__VERSION__ = "0.1.1"
+__VERSION__ = "0.1.2"
 
 
 def get_resource_path(relative_path):
