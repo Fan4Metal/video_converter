@@ -664,7 +664,8 @@ class VideoConverter(wx.Frame):
             # --- Определяем режим кодирования ---
             mode = self.encode_mode.GetSelection()
             if mode == 0:  # Постоянное качество
-                video_codec_args = ["-qp", str(self.qp_value), "-b:v", "0"]
+                # Режим переменного битрейта с целевым качеством (QP) - более гибкий, чем просто -qp
+                video_codec_args = ["-rc", "vbr", "-cq", str(self.qp_value), "-b:v", "0", "-qmin", "0"]
                 wx.CallAfter(self.log.AppendText, f"🎯 Режим: постоянное качество (QP={self.qp_value})\n")
             else:  # Постоянный битрейт
                 target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
@@ -689,15 +690,13 @@ class VideoConverter(wx.Frame):
                 "-vf",
                 vf_filter,
                 "-preset",
-                "p4",
+                "p5",  # p5 (slow) - хороший баланс скорости и качества
                 *video_codec_args,
                 "-profile:v",
                 "high",
                 "-tune",
                 "hq",
                 "-spatial_aq",
-                "1",
-                "-temporal_aq",
                 "1",
                 *audio_codec_args,
                 "-map_metadata",
@@ -736,7 +735,6 @@ class VideoConverter(wx.Frame):
             stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
-            universal_newlines=True,
             encoding="utf-8",
             errors="replace",
             creationflags=subprocess.CREATE_NO_WINDOW,
