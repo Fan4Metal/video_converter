@@ -690,7 +690,7 @@ class VideoConverter(wx.Frame):
                 "-vf",
                 vf_filter,
                 "-preset",
-                "p5",  # p5 (slow) - хороший баланс скорости и качества
+                "p4",
                 *video_codec_args,
                 "-profile:v",
                 "high",
@@ -848,12 +848,14 @@ class VideoConverter(wx.Frame):
         self.btn_browse.Disable()
         self.qp_slider.Disable()
         self.audio_choice.Disable()
+        self.encode_mode.Disable()
 
     # --- Включить интерфейс ---
     def enable_interface(self):
         self.btn_browse.Enable()
         self.qp_slider.Enable()
         self.audio_choice.Enable()
+        self.encode_mode.Enable()
 
     # --- Блокировка интерфейса ---
     def on_skip_video(self, event):
