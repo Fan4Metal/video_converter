@@ -696,6 +696,8 @@ class VideoConverter(wx.Frame):
                 "high",
                 "-tune",
                 "hq",
+                "-b_ref_mode",
+                "middle",  # Улучшает сжатие на новых GPU
                 "-spatial_aq",
                 "1",
                 *audio_codec_args,
