@@ -386,21 +386,28 @@ class VideoConverter(wx.Frame):
         options_box = wx.BoxSizer(wx.HORIZONTAL)
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
-        self.chk_limit_res.SetValue(True)
-        options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
+        self.chk_limit_res.SetValue(False)
+        options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
         # Тонмаппинг: авто / вкл / выкл
         self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
-        options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+        options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(2))
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
         self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
-        options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
+        options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
         # Чекбокс: не перекодировать видео
-        self.chk_skip_video = wx.CheckBox(panel, label="Не перекодировать видео")
+        self.chk_skip_video = wx.CheckBox(panel, label="не конв. видео")
+        self.chk_skip_video.SetToolTip(wx.ToolTip("Не конвертировать видео"))
         self.chk_skip_video.SetValue(False)
         self.chk_skip_video.Bind(wx.EVT_CHECKBOX, self.on_skip_video)
-        options_box.Add(self.chk_skip_video, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(20))
+        options_box.Add(self.chk_skip_video, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+
+        # Чекбокс: не перекодировать аудио
+        self.chk_skip_audio = wx.CheckBox(panel, label="не конв. аудио")
+        self.chk_skip_audio.SetToolTip(wx.ToolTip("Не конвертировать аудио"))
+        self.chk_skip_audio.SetValue(False)
+        options_box.Add(self.chk_skip_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
         # Чекбокс: debug
         self.chk_debug = wx.CheckBox(panel, label="Debug")
@@ -594,9 +601,9 @@ class VideoConverter(wx.Frame):
         audio_index = self.selected_track
 
         # Определяем, нужно ли кодировать аудио. Если кодек aac, то не кодируем
-        if self.audiocodec == "aac":
+        if self.chk_skip_audio.GetValue():
             audio_codec_args = ["-c:a", "copy"]
-            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: копирование (исходный кодек: {self.audiocodec})\n")
+            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: отключено (исходный кодек: {self.audiocodec})\n")
         else:
             audio_codec_args = ["-c:a", "aac", "-ac", str(self.ch), "-b:a", bitrate]
             wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: {self.audiocodec}, каналов: {self.ch}, битрейт: {bitrate}\n")
