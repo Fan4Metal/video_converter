@@ -426,7 +426,7 @@ class VideoConverter(wx.Frame):
         vbox.Add(btn_box, 0, wx.EXPAND)
 
         # --- Прогресс ---
-        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)))
+        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL | wx.GA_PROGRESS)
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
         vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
@@ -801,7 +801,7 @@ class VideoConverter(wx.Frame):
         if self.process and self.process.poll() is None:
             self.process.wait()
 
-        wx.CallAfter(self.progress.SetValue, 100)
+        wx.CallAfter(self.progress.SetValue, 0)
         wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
         wx.CallAfter(self.progress_label.SetLabel, "✅ Завершено │ ⚡ 1.0x │ 🎞️ — fps")
         wx.CallAfter(self.log.AppendText, f"\nРабота завершена: {self.output_file}\n")
@@ -834,8 +834,9 @@ class VideoConverter(wx.Frame):
 
         self.process = None
         self.converting = False
+        wx.CallAfter(self.progress.SetValue, 0)
         wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
-        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем")
+        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем │ ⚡ 1.0x │ 🎞️ — fps")
 
     # --- Закрытие окна ---
     def on_close(self, event):
