@@ -253,7 +253,7 @@ def get_video_info(filepath: str) -> dict:
                 (
                     "stream=codec_name,width,height,r_frame_rate,bit_rate,"
                     "display_aspect_ratio,color_space,color_transfer,color_primaries:"
-                    "format=duration,bit_rate"
+                    "format=duration,bit_rate,size"
                 ),
                 "-of",
                 "json",
@@ -270,6 +270,7 @@ def get_video_info(filepath: str) -> dict:
         info["codec"] = stream.get("codec_name", "?")
         info["width"] = stream.get("width", "?")
         info["height"] = stream.get("height", "?")
+        info["size"] = fmt.get("size", 0)
 
         # --- FPS ---
         fps_raw = stream.get("r_frame_rate", "0/0")
@@ -341,9 +342,10 @@ class VideoConverter(wx.Frame):
     COL_RES = 1
     COL_BR = 2
     COL_SIZE = 3
-    COL_AUDIO = 4
-    COL_STATUS = 5
-    COL_PROGRESS = 6
+    COL_TIME = 4
+    COL_AUDIO = 5
+    COL_STATUS = 6
+    COL_PROGRESS = 7
 
     def __init__(self):
         super().__init__(
@@ -367,16 +369,18 @@ class VideoConverter(wx.Frame):
         # --- Компоновка интерфейса ---
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        # --- Toolbar row (draft) ---
+        # --- Кнопки управления ---
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add = wx.Button(panel, label="Добавить файлы...")
+        self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_file)
+
         self.btn_remove = wx.Button(panel, label="Удалить")
         self.btn_clear = wx.Button(panel, label="Очистить")
 
         # Минимальная высота кнопок под HiDPI
-        self.btn_add.SetMinSize(self.FromDIP(wx.Size(-1, 32)))
-        self.btn_remove.SetMinSize(self.FromDIP(wx.Size(-1, 32)))
-        self.btn_clear.SetMinSize(self.FromDIP(wx.Size(-1, 32)))
+        self.btn_add.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
+        self.btn_remove.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
+        self.btn_clear.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
 
         top.Add(self.btn_add, 0, wx.ALL, self.FromDIP(5))
         top.Add(self.btn_remove, 0, wx.ALL, self.FromDIP(5))
@@ -393,12 +397,13 @@ class VideoConverter(wx.Frame):
         )
 
         # Колонки: ширины в DIP
-        self.list.InsertColumn(self.COL_FILE, "Файл", width=self.FromDIP(380))
+        self.list.InsertColumn(self.COL_FILE, "Файл", width=self.FromDIP(360))
         self.list.InsertColumn(self.COL_RES, "Разрешение", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_BR, "Битрейт", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_SIZE, "Размер", width=self.FromDIP(100))
-        self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(260))
-        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(150))
+        self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
+        self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
+        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
@@ -476,6 +481,9 @@ class VideoConverter(wx.Frame):
         btn_box.Add(self.btn_start, 1, wx.ALL | wx.EXPAND, self.FromDIP(5))
         btn_box.Add(self.btn_toggle_log, 0, wx.ALL, self.FromDIP(5))
         vbox.Add(btn_box, 0, wx.EXPAND)
+
+        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL | wx.GA_PROGRESS)
+        vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
         vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
 
@@ -485,25 +493,30 @@ class VideoConverter(wx.Frame):
         panel.SetSizer(vbox)
 
         # demo data
-        self._add_row(
-            path=r"D:\\Films\\Example.mkv",
-            resolution="3840×1600",
-            bitrate="18.2 Мбит/с",
-            size_bytes=8_765_432_100,
-            audio_choices=["0: aac (2ch, 192 kbps, rus)", "1: ac3 (6ch, 640 kbps, eng)"],
-        )
-        self._add_row(
-            path=r"D:\\Films\\Example2.mp4",
-            resolution="1920×804",
-            bitrate="7.4 Мбит/с",
-            size_bytes=2_345_000_000,
-            audio_choices=["0: aac (2ch, 160 kbps, und)"],
-        )
-        self.SetSize(self.FromDIP(wx.Size(1350, 520)))
+        # self._add_row(
+        #     path=r"D:\\Films\\Example.mkv",
+        #     resolution="3840×1600",
+        #     bitrate="18.2 Мбит/с",
+        #     size_bytes=8_765_432_100,
+        #     audio_choices=["0: aac (2ch, 192 kbps, rus)", "1: ac3 (6ch, 640 kbps, eng)"],
+        # )
+
+        self.SetSize(self.FromDIP(wx.Size(1350, 620)))
+        self.SetIcon(wx.Icon(get_resource_path("./images/favicon.png")))
         self.Centre()
         self.Show()
 
-    def _add_row(self, path: str, resolution: str, bitrate: str, size_bytes: int, audio_choices: list[str]):
+        # --- Проверка наличия ffmpeg и ffprobe ---
+        if not os.path.isfile(FFMPEG_PATH):
+            self.log.AppendText("Не найден ffmpeg.exe\n")
+            self.btn_start.Disable()
+        if not os.path.isfile(FFPROBE_PATH):
+            self.log.AppendText("Не найден ffprobe.exe\n")
+            self.btn_browse.Disable()
+            self.audio_choice.Disable()
+            self.btn_start.Disable()
+
+    def _add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
         row = self.list.GetItemCount()
 
         filename = os.path.basename(path)
@@ -511,6 +524,7 @@ class VideoConverter(wx.Frame):
 
         self.list.SetStringItem(row, self.COL_RES, resolution)
         self.list.SetStringItem(row, self.COL_BR, bitrate)
+        self.list.SetStringItem(row, self.COL_TIME, format_time(duration))
         self.list.SetStringItem(row, self.COL_SIZE, human_size(size_bytes))
         self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
 
@@ -530,120 +544,6 @@ class VideoConverter(wx.Frame):
             self.row_widgets = {}
         self.row_widgets[row] = {"choice": choice, "gauge": gauge, "path": path}
 
-        # # --- Ввод файла ---
-        # file_box = wx.BoxSizer(wx.HORIZONTAL)
-        # self.file_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
-        # self.btn_browse = wx.Button(panel, label="Выбрать файл...")
-        # file_box.Add(self.file_txt, 1, wx.ALL | wx.EXPAND, self.FromDIP(5))
-        # file_box.Add(self.btn_browse, 0, wx.ALL, self.FromDIP(5))
-        # vbox.Add(file_box, 0, wx.EXPAND)
-
-        # # --- Аудио дорожка ---
-        # self.audio_choice = wx.Choice(panel, choices=[])
-        # vbox.Add(wx.StaticText(panel, label="Аудио дорожка:"), 0, wx.LEFT | wx.TOP, self.FromDIP(8))
-        # vbox.Add(self.audio_choice, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
-
-        # # --- Режим кодирования (в одной строке) ---
-        # self.encode_mode = wx.RadioBox(
-        #     panel,
-        #     label="Режим кодирования",
-        #     choices=["🎯 Постоянное качество (QP)", "📦 Постоянный битрейт (CBR)"],
-        #     majorDimension=2,
-        #     style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,  # расположение в одну строку
-        # )
-        # self.encode_mode.SetSelection(0)
-        # self.encode_mode.Bind(wx.EVT_RADIOBOX, self.on_mode_change)
-        # vbox.Add(self.encode_mode, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
-
-        # # --- Слайдер качества / битрейта ---
-        # self.slider_label = wx.StaticText(panel, label="Качество (QP, меньше = лучше):")
-        # vbox.Add(self.slider_label, 0, wx.LEFT | wx.TOP, self.FromDIP(8))
-
-        # self.qp_slider = wx.Slider(panel, minValue=14, maxValue=30, value=22, style=wx.SL_HORIZONTAL)
-        # vbox.Add(self.qp_slider, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
-
-        # self.qp_label = wx.StaticText(panel, label="QP = 22")
-        # vbox.Add(self.qp_label, 0, wx.LEFT, self.FromDIP(12))
-
-        # self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
-
-        # # --- Дополнительные опции ---
-        # options_box = wx.BoxSizer(wx.HORIZONTAL)
-
-        # self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
-        # self.chk_limit_res.SetValue(False)
-        # options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
-
-        # # Тонмаппинг: авто / вкл / выкл
-        # self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
-        # options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(2))
-        # self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
-        # self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
-        # options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
-
-        # # Чекбокс: не перекодировать видео
-        # self.chk_skip_video = wx.CheckBox(panel, label="не конв. видео")
-        # self.chk_skip_video.SetToolTip(wx.ToolTip("Не конвертировать видео"))
-        # self.chk_skip_video.SetValue(False)
-        # self.chk_skip_video.Bind(wx.EVT_CHECKBOX, self.on_skip_video)
-        # options_box.Add(self.chk_skip_video, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
-
-        # # Чекбокс: не перекодировать аудио
-        # self.chk_skip_audio = wx.CheckBox(panel, label="не конв. аудио")
-        # self.chk_skip_audio.SetToolTip(wx.ToolTip("Не конвертировать аудио"))
-        # self.chk_skip_audio.SetValue(False)
-        # options_box.Add(self.chk_skip_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
-
-        # # Чекбокс: debug
-        # self.chk_debug = wx.CheckBox(panel, label="Debug")
-        # self.chk_debug.SetValue(False)
-        # options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        # vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT, self.FromDIP(10))
-
-        # # --- Кнопки управления ---
-        # btn_box = wx.BoxSizer(wx.HORIZONTAL)
-        # self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
-        # self.btn_toggle_log = wx.Button(panel, label="📋 Скрыть лог", size=self.FromDIP(wx.Size(100, 25)))
-        # self.btn_toggle_log.SetToolTip("Показать/Скрыть лог")
-        # btn_box.Add(self.btn_start, 1, wx.ALL | wx.EXPAND, self.FromDIP(5))
-        # btn_box.Add(self.btn_toggle_log, 0, wx.ALL, self.FromDIP(5))
-        # vbox.Add(btn_box, 0, wx.EXPAND)
-
-        # # --- Прогресс ---
-        # self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL | wx.GA_PROGRESS)
-        # vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
-        # self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
-        # vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
-
-        # # --- Лог ---
-        # self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
-        # # vbox.Add(self.log, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
-
-        # panel.SetSizer(vbox)
-
-        # # --- Привязки событий ---
-        # self.btn_browse.Bind(wx.EVT_BUTTON, self.on_browse)
-        # self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
-        # self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
-        # self.Bind(wx.EVT_CLOSE, self.on_close)
-
-        # self.SetIcon(wx.Icon(get_resource_path("./images/favicon.png")))
-        # self.SetSize(self.FromDIP(wx.Size(750, 620)))
-        # self.Centre()
-        # self.on_toggle_log(None)
-        # self.Show()
-
-        # # --- Проверка наличия ffmpeg и ffprobe ---
-        # if not os.path.isfile(FFMPEG_PATH):
-        #     self.log.AppendText("Не найден ffmpeg.exe\n")
-        #     self.btn_start.Disable()
-        # if not os.path.isfile(FFPROBE_PATH):
-        #     self.log.AppendText("Не найден ffprobe.exe\n")
-        #     self.btn_browse.Disable()
-        #     self.audio_choice.Disable()
-        #     self.btn_start.Disable()
-
     def on_mode_change(self, event):
         """Переключает слайдер между режимами QP и CBR"""
         mode = self.encode_mode.GetSelection()
@@ -660,14 +560,15 @@ class VideoConverter(wx.Frame):
 
     # --- Показать/Скрыть лог ---
     def on_toggle_log(self, event):
+        current_size = self.ToDIP(self.GetSize())
         if self.log_visible:
             self.log.Hide()
-            self.SetSize(self.FromDIP(wx.Size(-1, 520)))
+            self.SetSize(self.FromDIP(wx.Size(-1, current_size.height - 205)))
             self.btn_toggle_log.SetLabel("📋 Показать лог")
             self.Layout()
         else:
             self.log.Show()
-            self.SetSize(self.FromDIP(wx.Size(-1, 725)))
+            self.SetSize(self.FromDIP(wx.Size(-1, current_size.height + 205)))
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
             self.Layout()
         self.log_visible = not self.log_visible
@@ -684,7 +585,7 @@ class VideoConverter(wx.Frame):
             self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
 
     # --- Выбор файла ---
-    def on_browse(self, event):
+    def on_add_file(self, event):
         with wx.FileDialog(
             self,
             "Выбери видеофайл",
@@ -692,36 +593,41 @@ class VideoConverter(wx.Frame):
             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         ) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
-                self.set_input_file(dlg.GetPath())
+                self.set_input_file([dlg.GetPath()])
 
     # --- Установка входного файла ---
-    def set_input_file(self, path):
-        self.input_file = path
-        self.file_txt.SetValue(path)
-        self.log.AppendText(f"{'-' * 30}\nВыбран файл: {path}\n")
+    def set_input_file(self, paths: list):
+        for path in paths:
+            self.input_file = path
+            self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
 
-        # --- Аудио дорожки ---
-        tracks = get_audio_tracks(path)
-        self.audio_tracks = tracks
-        self.audio_choice.Set(tracks)
-        if tracks:
-            self.audio_choice.SetSelection(0)
+            # --- Аудио дорожки ---
+            tracks = get_audio_tracks(path)
 
-        # --- Видеоинформация ---
-        info = get_video_info(path)
-        self.duration = info.get("duration", 0)
-        duration_str = format_time(self.duration)
+            # --- Видеоинформация ---
+            info = get_video_info(path)
+            self.duration = info.get("duration", 0)
+            duration_str = format_time(self.duration)
 
-        self.log.AppendText(
-            "🎥 Видео:\n"
-            f"🔹Кодек: {info['codec']}\n"
-            f"🔹Разрешение: {info['width']}×{info['height']}\n"
-            f"🔹FPS: {info['fps']}\n"
-            f"🔹Соотношение сторон: {info['aspect']}\n"
-            f"🔹Битрейт: {info['bitrate']}\n"
-            f"🔹Тип: {info['hdr_type']}\n"
-            f"🔹Длительность: {duration_str} ({info['duration']:.1f} сек)\n"
-        )
+            self.log.AppendText(
+                "🎥 Видео:\n"
+                f"🔹Кодек: {info['codec']}\n"
+                f"🔹Разрешение: {info['width']}×{info['height']}\n"
+                f"🔹FPS: {info['fps']}\n"
+                f"🔹Соотношение сторон: {info['aspect']}\n"
+                f"🔹Битрейт: {info['bitrate']}\n"
+                f"🔹Тип: {info['hdr_type']}\n"
+                f"🔹Длительность: {duration_str} ({info['duration']:.1f} сек)\n"
+            )
+
+            self._add_row(
+                path=path,
+                resolution=f"{info['width']}×{info['height']}",
+                duration=info["duration"],
+                bitrate=f"{info['bitrate']}",
+                size_bytes=info["size"],
+                audio_choices=tracks,
+            )
 
     # --- Конвертация ---
     def on_convert(self, event):
@@ -1079,7 +985,8 @@ class FileDropTarget(wx.FileDropTarget):
 
     def OnDropFiles(self, x, y, filenames):
         if filenames:
-            self.frame.set_input_file(filenames[0])
+            self.frame.set_input_file(filenames)
+
         return True
 
 
