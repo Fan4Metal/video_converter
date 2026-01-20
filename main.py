@@ -764,7 +764,7 @@ class VideoConverter(wx.Frame):
         self.btn_start.SetLabel("⏹ Отмена")
         self.progress.SetValue(0)
         self.progress_label.SetLabel("Прогресс: 0%")
-        self.log.AppendText("\n▶ Запуск очереди...\n")
+        self.log.AppendText(f"{'-' * 30}\n▶ Запуск очереди...\n")
 
         self.disable_interface()
 
@@ -804,7 +804,7 @@ class VideoConverter(wx.Frame):
                 if gauge:
                     wx.CallAfter(gauge.SetValue, 0)
 
-                wx.CallAfter(self.log.AppendText, f"\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
+                wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
 
                 ok = self.run_ffmpeg_with_progress(
@@ -820,6 +820,7 @@ class VideoConverter(wx.Frame):
                 if ok and not self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
+                    wx.CallAfter(self.log.AppendText, f"\nКонвертация завершена.")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
