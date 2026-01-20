@@ -18,7 +18,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.0 alpha"
+__VERSION__ = "0.2.0 beta"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -71,7 +71,7 @@ def run_ffprobe_json(args: list[str]) -> dict:
     Консоль НЕ скрываем.
     """
     try:
-        p = subprocess.run(args, capture_output=True, text=True, check=True)
+        p = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
         if not p.stdout.strip():
             return {}
         return json.loads(p.stdout)
@@ -971,6 +971,7 @@ class VideoConverter(wx.Frame):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         except Exception as e:
             wx.CallAfter(self.log.AppendText, f"❌ Не удалось запустить ffmpeg: {e}\n")
