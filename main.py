@@ -10,20 +10,23 @@ import time
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
 
-ctypes.windll.shcore.SetProcessDpiAwareness(2)
+
+# --- HiDPI (Windows only) ---
+if sys.platform.startswith("win"):
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+    except Exception:
+        pass
 
 __VERSION__ = "0.2.0 alpha"
 
 
-def get_resource_path(relative_path):
+def get_resource_path(relative_path: str) -> str:
     """
-    Определение пути для запуска из автономного exe файла.
-    Pyinstaller cоздает временную папку, путь в _MEIPASS.
+    PyInstaller создает временную папку, путь в sys._MEIPASS.
+    В обычном запуске берем текущую папку.
     """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
     return os.path.join(base_path, relative_path)
 
 
@@ -31,296 +34,10 @@ FFMPEG_PATH = get_resource_path("ffmpeg.exe")
 FFPROBE_PATH = get_resource_path("ffprobe.exe")
 
 
-# --- Определение битрейта по количеству каналов ---
-def get_audio_bitrate(channels: int) -> str:
-    if channels <= 1:
-        return "128k"
-    elif channels == 2:
-        return "192k"
-    elif channels <= 6:
-        return "384k"
-    elif channels >= 8:
-        return "512k"
-    return "256k"
-
-
 def format_time(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-# --- Извлечение списка аудиодорожек ---
-def get_audio_tracks(filepath):
-    def fix_encoding(text: str):
-        """Преобразование кодировки в UTF-8"""
-        return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
-
-    try:
-        result = subprocess.run(
-            [
-                FFPROBE_PATH,
-                "-v",
-                "error",
-                "-select_streams",
-                "a",
-                "-show_entries",
-                "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
-                "-of",
-                "json",
-                filepath,
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        data = json.loads(result.stdout)
-        tracks = []
-
-        for stream in data.get("streams", []):
-            idx = stream.get("index", "?")
-            codec = stream.get("codec_name", "?")
-            ch = stream.get("channels", "?")
-            br = stream.get("bit_rate")
-            tags = stream.get("tags", {})
-
-            lang = tags.get("language", "und")
-            title_raw = tags.get("title", "").strip()
-            title = fix_encoding(title_raw)
-
-            if br:
-                try:
-                    br_kbps = int(int(br) / 1000)
-                except Exception:
-                    br_kbps = "?"
-            else:
-                br_kbps = "?"
-
-            desc_parts = [f"{idx}: {codec}", f"{ch}ch", f"{br_kbps} kbps", lang]
-            if title:
-                desc_parts.append(f"«{title}»")
-
-            desc = " (" + ", ".join(desc_parts[1:]) + ")"
-            full_desc = f"{desc_parts[0]}{desc}"
-            tracks.append(full_desc)
-
-        return tracks
-
-    except Exception as e:
-        print("Ошибка при анализе аудио:", e)
-        return []
-
-
-def get_hdr_info(file_path: str) -> dict:
-    """
-    Определяет HDR тип видео: HDR10, HDR10+, HLG, Dolby Vision и т.п.
-    Возвращает подробную структуру:
-    {
-        "is_hdr": True/False,
-        "type": "HDR10 / Dolby Vision / SDR / HDR10+ / HLG",
-        "requires_tonemap": True/False,
-        "pix_fmt": "yuv420p10le",
-        "color_transfer": "...",
-        "color_primaries": "...",
-        "color_space": "...",
-        "dolby_profile": "5" (если найден)
-    }
-    """
-    result = {
-        "is_hdr": False,
-        "type": "SDR",
-        "requires_tonemap": False,
-        "pix_fmt": "?",
-        "color_transfer": "?",
-        "color_primaries": "?",
-        "color_space": "?",
-        "dolby_profile": None,
-    }
-
-    try:
-        # ffprobe JSON
-        cmd = [
-            FFPROBE_PATH,
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream_tags",
-            file_path,
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        data = json.loads(proc.stdout)
-
-        if not data.get("streams"):
-            return result
-
-        stream = data["streams"][0]
-        tags = stream.get("tags", {})
-
-        color_primaries = stream.get("color_primaries", "")
-        color_transfer = stream.get("color_transfer", "")
-        color_space = stream.get("color_space", "")
-        pix_fmt = stream.get("pix_fmt", "")
-
-        result.update(
-            {
-                "color_primaries": color_primaries,
-                "color_transfer": color_transfer,
-                "color_space": color_space,
-                "pix_fmt": pix_fmt,
-            }
-        )
-
-        # --- Dolby Vision detection ---
-        dv_profile = None
-        for key, value in tags.items():
-            if "dolby" in key.lower() or "dv" in key.lower():
-                if "profile" in value.lower() or value.isdigit():
-                    dv_profile = value
-                    break
-        if "dv_profile" in stream:
-            dv_profile = stream["dv_profile"]
-
-        if dv_profile:
-            result["is_hdr"] = True
-            result["type"] = f"Dolby Vision (P{dv_profile})"
-            result["dolby_profile"] = dv_profile
-            result["requires_tonemap"] = True
-            return result
-
-        # --- HDR10+ detection ---
-        side_data = stream.get("side_data_list", [])
-        if any("HDR10Plus" in str(d) for d in side_data):
-            result["is_hdr"] = True
-            result["type"] = "HDR10+"
-            result["requires_tonemap"] = True
-            return result
-
-        # --- HDR10 / PQ / HLG detection ---
-        if "smpte2084" in color_transfer.lower():
-            result["is_hdr"] = True
-            result["type"] = "HDR10 / PQ"
-            result["requires_tonemap"] = True
-        elif "arib-std-b67" in color_transfer.lower() or "hlg" in color_transfer.lower():
-            result["is_hdr"] = True
-            result["type"] = "HLG"
-            result["requires_tonemap"] = False
-        elif "bt2020" in color_primaries.lower():
-            result["is_hdr"] = True
-            result["type"] = "BT.2020 SDR"
-            result["requires_tonemap"] = False
-        else:
-            result["is_hdr"] = False
-            result["type"] = "SDR"
-            result["requires_tonemap"] = False
-
-    except Exception as e:
-        print(f"⚠ Ошибка анализа HDR: {e}")
-
-    return result
-
-
-def get_video_info(filepath: str) -> dict:
-    """
-    Извлекает информацию о видеофайле (кодек, разрешение, FPS, битрейт, HDR и т.д.)
-    через ffprobe и возвращает словарь с параметрами.
-    """
-    info = {
-        "codec": "?",
-        "width": "?",
-        "height": "?",
-        "fps": "?",
-        "aspect": "?",
-        "bitrate": "?",
-        "hdr_type": "?",
-        "duration": 0.0,
-    }
-
-    try:
-        result = subprocess.run(
-            [
-                FFPROBE_PATH,
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                (
-                    "stream=codec_name,width,height,r_frame_rate,bit_rate,"
-                    "display_aspect_ratio,color_space,color_transfer,color_primaries:"
-                    "format=duration,bit_rate,size"
-                ),
-                "-of",
-                "json",
-                filepath,
-            ],
-            capture_output=True,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        data = json.loads(result.stdout)
-        stream = data.get("streams", [{}])[0] if data.get("streams") else {}
-        fmt = data.get("format", {})
-
-        info["codec"] = stream.get("codec_name", "?")
-        info["width"] = stream.get("width", "?")
-        info["height"] = stream.get("height", "?")
-        info["size"] = fmt.get("size", 0)
-
-        # --- FPS ---
-        fps_raw = stream.get("r_frame_rate", "0/0")
-        try:
-            num, den = fps_raw.split("/")
-            info["fps"] = round(float(num) / float(den), 2) if float(den) != 0 else "?"
-        except Exception:
-            info["fps"] = "?"
-
-        # --- Битрейт ---
-        bitrate = stream.get("bit_rate") or fmt.get("bit_rate")
-        if bitrate:
-            try:
-                info["bitrate"] = f"{int(bitrate) / 1_000_000:.2f} Мбит/с"
-            except Exception:
-                info["bitrate"] = "?"
-        else:
-            info["bitrate"] = "?"
-
-        # --- Соотношение сторон ---
-        info["aspect"] = stream.get("display_aspect_ratio", "?")
-
-        # --- Длительность ---
-        try:
-            info["duration"] = float(fmt.get("duration", 0))
-        except Exception:
-            info["duration"] = 0.0
-
-        # --- Определяем HDR тип ---
-        color_trc = stream.get("color_transfer", "")
-        if color_trc:
-            if "smpte2084" in color_trc:
-                info["hdr_type"] = "HDR10 / PQ"
-            elif "arib-std-b67" in color_trc:
-                info["hdr_type"] = "HLG"
-            elif "bt2020" in color_trc:
-                info["hdr_type"] = "BT.2020 SDR"
-            else:
-                info["hdr_type"] = color_trc
-        else:
-            info["hdr_type"] = "SDR"
-
-        hdr_info = get_hdr_info(filepath)
-        info["hdr_type"] = hdr_info["type"]
-        info["requires_tonemap"] = hdr_info["requires_tonemap"]
-
-    except Exception as e:
-        print(f"⚠ Ошибка получения данных через ffprobe: {e}")
-
-    return info
 
 
 def human_size(num_bytes: int) -> str:
@@ -335,9 +52,316 @@ def human_size(num_bytes: int) -> str:
     return f"{num:.1f} PB"
 
 
+# --- Определение битрейта по количеству каналов ---
+def get_audio_bitrate(channels: int) -> str:
+    if channels <= 1:
+        return "128k"
+    if channels == 2:
+        return "192k"
+    if channels <= 6:
+        return "384k"
+    if channels >= 8:
+        return "512k"
+    return "256k"
+
+
+def run_ffprobe_json(args: list[str]) -> dict:
+    """
+    Унифицированный вызов ffprobe, возвращает JSON dict (или {}).
+    Консоль НЕ скрываем.
+    """
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, check=True)
+        if not p.stdout.strip():
+            return {}
+        return json.loads(p.stdout)
+    except Exception:
+        return {}
+
+
+def get_audio_tracks(filepath: str) -> list[str]:
+    """
+    Возвращает список строк для Choice.
+    Важно: stream.index у ffprobe — это индекс потока в контейнере (может быть 1,2,3...),
+    а выбор у пользователя будет 0..N-1 (порядок аудио-стримов).
+    Мы показываем stream.index в тексте, но мапим по порядку (a:0, a:1...).
+    """
+
+    def fix_encoding(text: str) -> str:
+        # если теги в cp1251
+        try:
+            return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
+        except Exception:
+            return text
+
+    data = run_ffprobe_json(
+        [
+            FFPROBE_PATH,
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
+            "-of",
+            "json",
+            filepath,
+        ]
+    )
+
+    tracks: list[str] = []
+    for stream in data.get("streams", []):
+        idx = stream.get("index", "?")
+        codec = stream.get("codec_name", "?")
+        ch = stream.get("channels", "?")
+        br = stream.get("bit_rate")
+        tags = stream.get("tags", {}) or {}
+
+        lang = tags.get("language", "und")
+        title_raw = (tags.get("title") or "").strip()
+        title = fix_encoding(title_raw)
+
+        if br:
+            try:
+                br_kbps = int(int(br) / 1000)
+            except Exception:
+                br_kbps = "?"
+        else:
+            br_kbps = "?"
+
+        desc_parts = [f"{idx}: {codec}", f"{ch}ch", f"{br_kbps} kbps", lang]
+        if title:
+            desc_parts.append(f"«{title}»")
+
+        desc = " (" + ", ".join(desc_parts[1:]) + ")"
+        tracks.append(f"{desc_parts[0]}{desc}")
+
+    return tracks
+
+
+def get_audio_channels(input_file: str, selected_track: int) -> int:
+    """
+    selected_track — это порядковый номер аудио-стрима среди аудио (a:0, a:1...),
+    то есть именно то, что Choice.GetSelection() возвращает.
+    """
+    data = run_ffprobe_json(
+        [
+            FFPROBE_PATH,
+            "-v",
+            "error",
+            "-select_streams",
+            f"a:{selected_track}",
+            "-show_entries",
+            "stream=channels",
+            "-of",
+            "json",
+            input_file,
+        ]
+    )
+    try:
+        return int((data.get("streams") or [{}])[0].get("channels") or 2)
+    except Exception:
+        return 2
+
+
+def get_hdr_info(file_path: str) -> dict:
+    """
+    Упрощённый HDR анализ.
+    Важно: у тебя в исходнике был баг — ты вызывал ffprobe только stream_tags,
+    но потом пытался читать поля stream['color_transfer'] и т.п. (их там не было).
+    Я расширил show_entries, чтобы эти поля реально пришли.
+    """
+    result = {
+        "is_hdr": False,
+        "type": "SDR",
+        "requires_tonemap": False,
+        "pix_fmt": "?",
+        "color_transfer": "",
+        "color_primaries": "",
+        "color_space": "",
+        "dolby_profile": None,
+    }
+
+    data = run_ffprobe_json(
+        [
+            FFPROBE_PATH,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt,color_transfer,color_primaries,color_space:stream_tags:stream=side_data_list",
+            "-of",
+            "json",
+            file_path,
+        ]
+    )
+
+    streams = data.get("streams") or []
+    if not streams:
+        return result
+
+    stream = streams[0]
+    tags = stream.get("tags", {}) or {}
+
+    color_primaries = (stream.get("color_primaries") or "").lower()
+    color_transfer = (stream.get("color_transfer") or "").lower()
+    color_space = (stream.get("color_space") or "").lower()
+    pix_fmt = stream.get("pix_fmt") or "?"
+
+    result.update(
+        {
+            "pix_fmt": pix_fmt,
+            "color_transfer": color_transfer,
+            "color_primaries": color_primaries,
+            "color_space": color_space,
+        }
+    )
+
+    # Dolby Vision (очень приблизительно)
+    dv_profile = None
+    for k, v in tags.items():
+        ks = str(k).lower()
+        vs = str(v).lower()
+        if "dolby" in ks or "dv" in ks:
+            if "profile" in vs or vs.isdigit():
+                dv_profile = v
+                break
+
+    if dv_profile:
+        result["is_hdr"] = True
+        result["type"] = f"Dolby Vision (P{dv_profile})"
+        result["dolby_profile"] = dv_profile
+        result["requires_tonemap"] = True
+        return result
+
+    side_data = stream.get("side_data_list", []) or []
+    if any("hdr10plus" in str(d).lower() for d in side_data):
+        result["is_hdr"] = True
+        result["type"] = "HDR10+"
+        result["requires_tonemap"] = True
+        return result
+
+    if "smpte2084" in color_transfer:
+        result["is_hdr"] = True
+        result["type"] = "HDR10 / PQ"
+        result["requires_tonemap"] = True
+    elif "arib-std-b67" in color_transfer or "hlg" in color_transfer:
+        result["is_hdr"] = True
+        result["type"] = "HLG"
+        result["requires_tonemap"] = False
+    elif "bt2020" in color_primaries:
+        result["is_hdr"] = True
+        result["type"] = "BT.2020 SDR"
+        result["requires_tonemap"] = False
+    else:
+        result["is_hdr"] = False
+        result["type"] = "SDR"
+        result["requires_tonemap"] = False
+
+    return result
+
+
+def get_video_info(filepath: str) -> dict:
+    info = {
+        "codec": "?",
+        "width": "?",
+        "height": "?",
+        "fps": "?",
+        "aspect": "?",
+        "bitrate": "?",
+        "hdr_type": "SDR",
+        "requires_tonemap": False,
+        "duration": 0.0,
+        "size": 0,
+    }
+
+    data = run_ffprobe_json(
+        [
+            FFPROBE_PATH,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            (
+                "stream=codec_name,width,height,r_frame_rate,bit_rate,display_aspect_ratio,"
+                "color_transfer,color_primaries,color_space:format=duration,bit_rate,size"
+            ),
+            "-of",
+            "json",
+            filepath,
+        ]
+    )
+
+    stream = (data.get("streams") or [{}])[0]
+    fmt = data.get("format") or {}
+
+    info["codec"] = stream.get("codec_name", "?")
+    info["width"] = stream.get("width", "?")
+    info["height"] = stream.get("height", "?")
+    info["aspect"] = stream.get("display_aspect_ratio", "?")
+    info["size"] = int(fmt.get("size") or 0)
+
+    # FPS
+    fps_raw = stream.get("r_frame_rate", "0/0")
+    try:
+        num, den = fps_raw.split("/")
+        info["fps"] = round(float(num) / float(den), 2) if float(den) != 0 else "?"
+    except Exception:
+        info["fps"] = "?"
+
+    # bitrate
+    br = stream.get("bit_rate") or fmt.get("bit_rate")
+    if br:
+        try:
+            info["bitrate"] = f"{int(br) / 1_000_000:.2f} Мбит/с"
+        except Exception:
+            info["bitrate"] = "?"
+    else:
+        info["bitrate"] = "?"
+
+    # duration
+    try:
+        info["duration"] = float(fmt.get("duration") or 0.0)
+    except Exception:
+        info["duration"] = 0.0
+
+    hdr = get_hdr_info(filepath)
+    info["hdr_type"] = hdr["type"]
+    info["requires_tonemap"] = bool(hdr["requires_tonemap"])
+
+    return info
+
+
+def unique_output_path(input_path: str) -> str:
+    base = os.path.splitext(input_path)[0] + "_conv"
+    ext = ".mp4"
+    out = base + ext
+    if not os.path.exists(out):
+        return out
+    n = 2
+    while True:
+        candidate = f"{base}_{n}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
+
+
+# --- Drag&Drop класс ---
+class FileDropTarget(wx.FileDropTarget):
+    def __init__(self, frame):
+        super().__init__()
+        self.frame = frame
+
+    def OnDropFiles(self, x, y, filenames):
+        if filenames:
+            self.frame.add_files(filenames)
+        return True
+
+
 # --- Основное окно приложения ---
 class VideoConverter(wx.Frame):
-    # столбцы в списке файлов
     COL_FILE = 0
     COL_RES = 1
     COL_BR = 2
@@ -353,31 +377,39 @@ class VideoConverter(wx.Frame):
             title=f"Video Converter (NVENC + AAC) {__VERSION__}",
             style=(wx.DEFAULT_FRAME_STYLE | wx.WANTS_CHARS),
         )
+        self.Bind(wx.EVT_CLOSE, self.on_close)
+
         panel = wx.Panel(self)
         panel.SetDropTarget(FileDropTarget(self))
 
-        self.input_file = ""
-        self.output_file = ""
-        self.audio_tracks = []
-        self.selected_track = 0
-        self.qp_value = 22
-        self.duration = 0
-        self.log_visible = True
+        # состояние
+        self.row_widgets: dict[int, dict] = {}
         self.converting = False
-        self.process = None
+        self.process: subprocess.Popen | None = None
+        self.cancel_event = threading.Event()
+        self.queue_thread: threading.Thread | None = None
+        self.all_jobs_duration = 0.0
+        self.done_duration = 0.0
+        self.current_output_file: str | None = None
 
-        # --- Компоновка интерфейса ---
+        self.qp_value = 22
+        self.bitrate_value = 8
+        self.log_visible = False
+
+        # layout
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        # --- Кнопки управления ---
+        # top buttons
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add = wx.Button(panel, label="Добавить файлы...")
         self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_file)
 
         self.btn_remove = wx.Button(panel, label="Удалить")
-        self.btn_clear = wx.Button(panel, label="Очистить")
+        self.btn_remove.Bind(wx.EVT_BUTTON, self.on_remove_selected)
 
-        # Минимальная высота кнопок под HiDPI
+        self.btn_clear = wx.Button(panel, label="Очистить")
+        self.btn_clear.Bind(wx.EVT_BUTTON, self.on_clear)
+
         self.btn_add.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
         self.btn_remove.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
         self.btn_clear.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
@@ -388,7 +420,7 @@ class VideoConverter(wx.Frame):
         top.AddStretchSpacer(1)
         vbox.Add(top, 0, wx.EXPAND)
 
-        # --- UltimateListCtrl ---
+        # UltimateListCtrl
         self.list = ULC.UltimateListCtrl(
             panel,
             agwStyle=(
@@ -396,85 +428,99 @@ class VideoConverter(wx.Frame):
             ),
         )
 
-        # Колонки: ширины в DIP
         self.list.InsertColumn(self.COL_FILE, "Файл", width=self.FromDIP(360))
         self.list.InsertColumn(self.COL_RES, "Разрешение", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_BR, "Битрейт", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_SIZE, "Размер", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
-        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(100))
+        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(140))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
-        # --- Режим кодирования (в одной строке) ---
+        # --- encode_mode + quality на одной строке ---
+        encode_row = wx.BoxSizer(wx.HORIZONTAL)
+
+        # encode mode (слева)
         self.encode_mode = wx.RadioBox(
             panel,
             label="Режим кодирования",
             choices=["🎯 Постоянное качество (QP)", "📦 Постоянный битрейт (CBR)"],
             majorDimension=2,
-            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,  # расположение в одну строку
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,
         )
         self.encode_mode.SetSelection(0)
         self.encode_mode.Bind(wx.EVT_RADIOBOX, self.on_mode_change)
-        vbox.Add(self.encode_mode, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
+        # чтобы RadioBox не раздувал строку и выглядел аккуратно
+        self.encode_mode.SetMinSize(self.FromDIP(wx.Size(430, -1)))
+
+        encode_row.Add(self.encode_mode, 0, wx.ALL | wx.ALIGN_TOP, self.FromDIP(5))
+
+        # quality (справа)
         vbox_quality = wx.BoxSizer(wx.HORIZONTAL)
 
-        # --- Слайдер качества / битрейта ---
-        self.slider_label = wx.StaticText(panel, label="Качество (QP, меньше = лучше):")
-        self.qp_slider = wx.Slider(panel, minValue=14, maxValue=30, value=22, style=wx.SL_HORIZONTAL, size=self.FromDIP(wx.Size(300, 25)))
-        self.qp_label = wx.StaticText(panel, label="QP = 22")
-
-        vbox_quality.Add(self.slider_label, 0, wx.LEFT | wx.TOP, self.FromDIP(8))
-        vbox_quality.Add(self.qp_slider, 0, wx.EXPAND | wx.TOP, self.FromDIP(5))
-        vbox_quality.Add(self.qp_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, self.FromDIP(8))
-        vbox.Add(vbox_quality, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
-
+        self.slider_label = wx.StaticText(panel, label="Качество, QP:", size=self.FromDIP(wx.Size(90, -1)))
+        self.slider_label.SetToolTip("Качество кодирования\nQP : меньше = лучше\nCBR: больше = лучше")
+        self.qp_slider = wx.Slider(
+            panel,
+            minValue=14,
+            maxValue=30,
+            value=22,
+            style=wx.SL_HORIZONTAL,
+            size=self.FromDIP(wx.Size(360, 25)),
+        )
+        self.qp_label = wx.StaticText(panel, label="QP = 22", size=self.FromDIP(wx.Size(150, -1)))
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
-        # --- Дополнительные опции ---
+        vbox_quality.Add(self.slider_label, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
+        vbox_quality.Add(self.qp_slider, 1, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(10))
+        vbox_quality.Add(self.qp_label, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        # растягиваем правую часть
+        encode_row.Add(vbox_quality, 1, wx.ALL | wx.EXPAND | wx.ALIGN_TOP, self.FromDIP(8))
+
+        # добавляем всю строку в главный vbox
+        vbox.Add(encode_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, self.FromDIP(5))
+
+        # options
         options_box = wx.BoxSizer(wx.HORIZONTAL)
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
         self.chk_limit_res.SetValue(False)
         options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
-        # Тонмаппинг: авто / вкл / выкл
         self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
         options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(2))
+
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
-        self.choice_tonemap.SetSelection(0)  # Авто по умолчанию
+        self.choice_tonemap.SetSelection(0)
         options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
-        # Чекбокс: не перекодировать видео
         self.chk_skip_video = wx.CheckBox(panel, label="не конв. видео")
         self.chk_skip_video.SetToolTip(wx.ToolTip("Не конвертировать видео"))
         self.chk_skip_video.SetValue(False)
         self.chk_skip_video.Bind(wx.EVT_CHECKBOX, self.on_skip_video)
         options_box.Add(self.chk_skip_video, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
-        # Чекбокс: не перекодировать аудио
         self.chk_skip_audio = wx.CheckBox(panel, label="не конв. аудио")
         self.chk_skip_audio.SetToolTip(wx.ToolTip("Не конвертировать аудио"))
         self.chk_skip_audio.SetValue(False)
         options_box.Add(self.chk_skip_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
-        # Чекбокс: debug
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
 
-        # --- Лог ---
-        self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2, size=self.FromDIP(wx.Size(-1, 200)))
-
         vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT | wx.BOTTOM, self.FromDIP(10))
 
-        # --- Кнопки управления ---
+        # buttons bottom
         btn_box = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
-        self.btn_toggle_log = wx.Button(panel, label="📋 Скрыть лог", size=self.FromDIP(wx.Size(100, 25)))
+        self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
+
+        self.btn_toggle_log = wx.Button(panel, label="📋 Скрыть лог", size=self.FromDIP(wx.Size(110, 28)))
         self.btn_toggle_log.SetToolTip("Показать/Скрыть лог")
         self.btn_toggle_log.Bind(wx.EVT_BUTTON, self.on_toggle_log)
 
@@ -482,83 +528,164 @@ class VideoConverter(wx.Frame):
         btn_box.Add(self.btn_toggle_log, 0, wx.ALL, self.FromDIP(5))
         vbox.Add(btn_box, 0, wx.EXPAND)
 
-        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL | wx.GA_PROGRESS)
+        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL)
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
+
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
         vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
 
+        self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2, size=self.FromDIP(wx.Size(-1, 200)))
+        self.log.Hide()
         vbox.Add(self.log, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
-        self.on_toggle_log(None)
         panel.SetSizer(vbox)
 
-        # demo data
-        # self._add_row(
-        #     path=r"D:\\Films\\Example.mkv",
-        #     resolution="3840×1600",
-        #     bitrate="18.2 Мбит/с",
-        #     size_bytes=8_765_432_100,
-        #     audio_choices=["0: aac (2ch, 192 kbps, rus)", "1: ac3 (6ch, 640 kbps, eng)"],
-        # )
-
-        self.SetSize(self.FromDIP(wx.Size(1350, 620)))
-        self.SetIcon(wx.Icon(get_resource_path("./images/favicon.png")))
+        self.SetSize(self.FromDIP(wx.Size(1400, 670)))
+        self.SetMinSize(self.GetSize())
+        icon_path = get_resource_path("images/favicon.png")
+        if os.path.isfile(icon_path):
+            try:
+                self.SetIcon(wx.Icon(icon_path))
+            except Exception:
+                pass
         self.Centre()
-        self.Show()
 
-        # --- Проверка наличия ffmpeg и ffprobe ---
+        # Скрываем лог по умолчанию как у тебя
+        # self.on_toggle_log(None)
+
+        # проверка ffmpeg/ffprobe
         if not os.path.isfile(FFMPEG_PATH):
-            self.log.AppendText("Не найден ffmpeg.exe\n")
+            self.log.AppendText("❌ Не найден ffmpeg.exe\n")
             self.btn_start.Disable()
         if not os.path.isfile(FFPROBE_PATH):
-            self.log.AppendText("Не найден ffprobe.exe\n")
-            self.btn_browse.Disable()
-            self.audio_choice.Disable()
+            self.log.AppendText("❌ Не найден ffprobe.exe\n")
             self.btn_start.Disable()
 
-    def _add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
-        row = self.list.GetItemCount()
+        self.Show()
 
-        filename = os.path.basename(path)
-        self.list.InsertStringItem(row, filename)
+    # --- UI actions ---
+    def on_add_file(self, event):
+        with wx.FileDialog(
+            self,
+            "Выбери видеофайлы",
+            wildcard="Видео файлы (*.mkv;*.mp4;*.mov;*.avi)|*.mkv;*.mp4;*.mov;*.avi",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
+        ) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                self.add_files(dlg.GetPaths())
 
-        self.list.SetStringItem(row, self.COL_RES, resolution)
-        self.list.SetStringItem(row, self.COL_BR, bitrate)
-        self.list.SetStringItem(row, self.COL_TIME, format_time(duration))
-        self.list.SetStringItem(row, self.COL_SIZE, human_size(size_bytes))
-        self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
+    def add_files(self, paths: list[str]):
+        for path in paths:
+            if not path or not os.path.isfile(path):
+                continue
 
-        # --- встроенный Choice для выбора аудио ---
-        choice = wx.Choice(self.list, choices=audio_choices)
-        if audio_choices:
-            choice.SetSelection(0)
-        self.list.SetItemWindow(row, self.COL_AUDIO, choice, expand=True)
+            self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
 
-        # --- прогресс-бар на строке ---
-        gauge = wx.Gauge(self.list, range=100, size=self.FromDIP(wx.Size(-1, 18)), style=wx.GA_HORIZONTAL)
-        gauge.SetValue(0)
-        self.list.SetItemWindow(row, self.COL_PROGRESS, gauge, expand=True)
+            tracks = get_audio_tracks(path)
+            info = get_video_info(path)
 
-        # Сохраняем виджеты, чтобы можно было обновлять
-        if not hasattr(self, "row_widgets"):
-            self.row_widgets = {}
-        self.row_widgets[row] = {"choice": choice, "gauge": gauge, "path": path}
+            self.log.AppendText(
+                "🎥 Видео:\n"
+                f"🔹Кодек: {info['codec']}\n"
+                f"🔹Разрешение: {info['width']}×{info['height']}\n"
+                f"🔹FPS: {info['fps']}\n"
+                f"🔹Соотношение сторон: {info['aspect']}\n"
+                f"🔹Битрейт: {info['bitrate']}\n"
+                f"🔹Тип: {info['hdr_type']}\n"
+                f"🔹Длительность: {format_time(info['duration'])} ({info['duration']:.1f} сек)\n"
+            )
+
+            self._add_row(
+                path=path,
+                resolution=f"{info['width']}×{info['height']}",
+                bitrate=str(info["bitrate"]),
+                duration=float(info["duration"] or 0.0),
+                size_bytes=int(info["size"] or 0),
+                audio_choices=tracks,
+            )
+
+    def on_remove_selected(self, event):
+        if self.converting:
+            wx.MessageBox("Нельзя удалять строки во время конвертации.", "Внимание", wx.OK | wx.ICON_WARNING)
+            return
+
+        row = self.list.GetFirstSelected()
+        if row == -1:
+            return
+
+        self._delete_row(row)
+
+    def on_clear(self, event):
+        if self.converting:
+            wx.MessageBox("Нельзя очищать список во время конвертации.", "Внимание", wx.OK | wx.ICON_WARNING)
+            return
+
+        # уничтожаем виджеты
+        for row in list(self.row_widgets.keys()):
+            w = self.row_widgets[row]
+            for key in ("choice", "gauge"):
+                try:
+                    ctrl = w.get(key)
+                    if ctrl:
+                        ctrl.Destroy()
+                except Exception:
+                    pass
+
+        self.list.DeleteAllItems()
+        self.row_widgets.clear()
+        self.log.AppendText("\n🧹 Список очищен.\n")
+
+    def _delete_row(self, row: int):
+        w = self.row_widgets.get(row)
+        if w:
+            try:
+                if w.get("choice"):
+                    w["choice"].Destroy()
+            except Exception:
+                pass
+            try:
+                if w.get("gauge"):
+                    w["gauge"].Destroy()
+            except Exception:
+                pass
+
+        self.list.DeleteItem(row)
+
+        # пересобираем row_widgets с новыми индексами
+        new_map: dict[int, dict] = {}
+        for i in range(self.list.GetItemCount()):
+            # после DeleteItem виджеты “остаются” в контроле, мы их держим в старых dict — надо сдвинуть
+            if i < row:
+                new_map[i] = self.row_widgets[i]
+            else:
+                new_map[i] = self.row_widgets[i + 1]
+        self.row_widgets = new_map
 
     def on_mode_change(self, event):
-        """Переключает слайдер между режимами QP и CBR"""
         mode = self.encode_mode.GetSelection()
-        if mode == 0:  # QP
-            self.slider_label.SetLabel("Качество (QP, меньше = лучше):")
+        if mode == 0:
+            self.slider_label.SetLabel("Качество, QP:")
             self.qp_slider.SetRange(14, 30)
             self.qp_slider.SetValue(22)
             self.qp_label.SetLabel("QP = 22")
-        else:  # CBR
+            self.qp_value = 22
+        else:
             self.slider_label.SetLabel("Битрейт (Мбит/с):")
-            self.qp_slider.SetRange(2, 25)  # битрейт от 2 до 25 Мбит/с
+            self.qp_slider.SetRange(2, 25)
             self.qp_slider.SetValue(8)
             self.qp_label.SetLabel("Битрейт = 8.0 Мбит/с")
+            self.bitrate_value = 8
 
-    # --- Показать/Скрыть лог ---
+    def on_qp_change(self, event):
+        mode = self.encode_mode.GetSelection()
+        val = self.qp_slider.GetValue()
+        if mode == 0:
+            self.qp_value = val
+            self.qp_label.SetLabel(f"QP = {val}")
+        else:
+            self.bitrate_value = val
+            self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
+
     def on_toggle_log(self, event):
         current_size = self.ToDIP(self.GetSize())
         if self.log_visible:
@@ -573,392 +700,6 @@ class VideoConverter(wx.Frame):
             self.Layout()
         self.log_visible = not self.log_visible
 
-    # --- Обновление QP ---
-    def on_qp_change(self, event):
-        mode = self.encode_mode.GetSelection()
-        val = self.qp_slider.GetValue()
-        if mode == 0:
-            self.qp_value = val
-            self.qp_label.SetLabel(f"QP = {val}")
-        else:
-            self.bitrate_value = val
-            self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
-
-    # --- Выбор файла ---
-    def on_add_file(self, event):
-        with wx.FileDialog(
-            self,
-            "Выбери видеофайл",
-            wildcard="Видео файлы (*.mkv;*.mp4;*.mov;*.avi)|*.mkv;*.mp4;*.mov;*.avi",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
-        ) as dlg:
-            if dlg.ShowModal() == wx.ID_OK:
-                self.set_input_file([dlg.GetPath()])
-
-    # --- Установка входного файла ---
-    def set_input_file(self, paths: list):
-        for path in paths:
-            self.input_file = path
-            self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
-
-            # --- Аудио дорожки ---
-            tracks = get_audio_tracks(path)
-
-            # --- Видеоинформация ---
-            info = get_video_info(path)
-            self.duration = info.get("duration", 0)
-            duration_str = format_time(self.duration)
-
-            self.log.AppendText(
-                "🎥 Видео:\n"
-                f"🔹Кодек: {info['codec']}\n"
-                f"🔹Разрешение: {info['width']}×{info['height']}\n"
-                f"🔹FPS: {info['fps']}\n"
-                f"🔹Соотношение сторон: {info['aspect']}\n"
-                f"🔹Битрейт: {info['bitrate']}\n"
-                f"🔹Тип: {info['hdr_type']}\n"
-                f"🔹Длительность: {duration_str} ({info['duration']:.1f} сек)\n"
-            )
-
-            self._add_row(
-                path=path,
-                resolution=f"{info['width']}×{info['height']}",
-                duration=info["duration"],
-                bitrate=f"{info['bitrate']}",
-                size_bytes=info["size"],
-                audio_choices=tracks,
-            )
-
-    # --- Конвертация ---
-    def on_convert(self, event):
-        if self.converting:
-            self.cancel_conversion()
-            return
-
-        if not self.input_file:
-            wx.MessageBox("Выберите файл!", "Ошибка", wx.OK | wx.ICON_ERROR)
-            return
-
-        self.selected_track = self.audio_choice.GetSelection()
-        if self.selected_track == wx.NOT_FOUND:
-            wx.MessageBox("Не выбрана аудиодорожка!", "Ошибка", wx.OK | wx.ICON_ERROR)
-            return
-
-        try:
-            info = subprocess.run(
-                [
-                    FFPROBE_PATH,
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    f"a:{self.selected_track}",
-                    "-show_entries",
-                    "stream=channels,codec_name",
-                    "-of",
-                    "json",
-                    self.input_file,
-                ],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            self.ch = json.loads(info.stdout).get("streams", [{}])[0].get("channels", 2)
-            self.audiocodec = json.loads(info.stdout).get("streams", [{}])[0].get("codec_name", None)
-        except Exception:
-            self.ch = 2
-            self.audiocodec = None
-
-        bitrate = get_audio_bitrate(self.ch)
-        self.output_file = os.path.splitext(self.input_file)[0] + "_conv.mp4"
-
-        if os.path.exists(self.output_file):
-            overwrite = wx.MessageBox(
-                f"Файл {os.path.basename(self.output_file)} уже существует! Перезаписать?", "Внимание!", wx.YES_NO | wx.ICON_WARNING
-            )
-            if overwrite != wx.YES:
-                return
-
-        self.converting = True
-        self.btn_start.SetLabel("⏹ Отмена")
-        self.log.AppendText(f"\n🎬 Конвертация...\n")
-        self.progress.SetValue(0)
-        self.progress_label.SetLabel("Прогресс: 0%")
-
-        self.disable_interface()
-        threading.Thread(target=self.run_ffmpeg_with_progress, args=(bitrate,), daemon=True).start()
-
-    # --- Основная конвертация ---
-    def run_ffmpeg_with_progress(self, bitrate):
-        audio_index = self.selected_track
-
-        # Определяем, нужно ли кодировать аудио. Если кодек aac, то не кодируем
-        if self.chk_skip_audio.GetValue():
-            audio_codec_args = ["-c:a", "copy"]
-            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: отключено (исходный кодек: {self.audiocodec})\n")
-        else:
-            audio_codec_args = ["-c:a", "aac", "-ac", str(self.ch), "-b:a", bitrate]
-            wx.CallAfter(self.log.AppendText, f"🎵 Перекодирование аудио: {self.audiocodec}, каналов: {self.ch}, битрейт: {bitrate}\n")
-
-        if not self.chk_skip_video.GetValue():  # если не нажато перекодировать видео
-            # --- Проверка HDR / SDR ---
-            hdr_info = get_hdr_info(self.input_file)
-            hdr_type = hdr_info["type"]
-            auto_tonemap = hdr_info["requires_tonemap"]
-
-            tonemap_mode = self.choice_tonemap.GetSelection()  # 0=Авто, 1=Вкл, 2=Выкл
-            if tonemap_mode == 2:
-                needs_tonemap = False
-            elif tonemap_mode == 1:
-                needs_tonemap = True
-            else:  # Авто
-                needs_tonemap = auto_tonemap
-
-            wx.CallAfter(
-                self.log.AppendText, f"🎨Тип видео: {hdr_type} | Тонмаппинг: {'включён' if needs_tonemap else 'не требуется/выключён'}\n"
-            )
-
-            # --- Проверяем, нужно ли масштабировать ---
-            scale_filter = ""
-            if self.chk_limit_res.GetValue():  # если включено в GUI
-                video_info = get_video_info(self.input_file)
-                width = int(video_info.get("width") or 0)
-                height = int(video_info.get("height") or 0)
-
-                if width > 1920 or height > 1080:
-                    # Вычисляем новое разрешение, сохраняя пропорции
-                    aspect_ratio = width / height if height else 1
-                    new_w, new_h = width, height
-
-                    if width / 1920 >= height / 1080:
-                        # Ограничение по ширине
-                        new_w = 1920
-                        new_h = int(1920 / aspect_ratio)
-                    else:
-                        # Ограничение по высоте
-                        new_h = 1080
-                        new_w = int(1080 * aspect_ratio)
-
-                    # FFmpeg фильтр
-                    scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
-
-                    wx.CallAfter(self.log.AppendText, f"📐 Масштабирование: {width}×{height} → {new_w}×{new_h}\n")
-                else:
-                    wx.CallAfter(self.log.AppendText, f"📐 Масштабирование не требуется ({width}×{height})\n")
-            else:
-                wx.CallAfter(self.log.AppendText, "📐 Масштабирование: отключено пользователем\n")
-
-            # --- Видео фильтр ---
-            if needs_tonemap:
-                print("needs_tonemap")
-                vf_filter = (
-                    "zscale=t=linear:npl=30,format=gbrpf32le,"
-                    "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
-                    "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
-                    f"{scale_filter}"
-                )
-            else:
-                vf_filter = f"format=yuv420p{scale_filter}"
-
-            # --- Определяем режим кодирования ---
-            mode = self.encode_mode.GetSelection()
-            if mode == 0:  # Постоянное качество
-                # Режим переменного битрейта с целевым качеством (QP) - более гибкий, чем просто -qp
-                video_codec_args = ["-rc", "vbr", "-cq", str(self.qp_value), "-b:v", "0", "-qmin", "0"]
-                wx.CallAfter(self.log.AppendText, f"🎯 Режим: постоянное качество (QP={self.qp_value})\n")
-            else:  # Постоянный битрейт
-                target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
-                video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
-                wx.CallAfter(self.log.AppendText, f"📦 Режим: постоянный битрейт ({target_bitrate})\n")
-
-            # --- Команда FFmpeg ---
-            cmd = [
-                FFMPEG_PATH,
-                "-hide_banner",
-                "-y",
-                "-i",
-                self.input_file,
-                "-map",
-                "0:v:0",
-                "-map",
-                f"0:a:{audio_index}",
-                "-c:v",
-                "h264_nvenc",
-                "-pix_fmt",
-                "yuv420p",
-                "-vf",
-                vf_filter,
-                "-preset",
-                "p4",
-                *video_codec_args,
-                "-profile:v",
-                "high",
-                "-tune",
-                "hq",
-                "-b_ref_mode",
-                "middle",  # Улучшает сжатие на новых GPU
-                "-spatial_aq",
-                "1",
-                *audio_codec_args,
-                "-map_metadata",
-                "-1",
-                "-sn",
-                # "-movflags",
-                # "+faststart",
-                self.output_file,
-            ]
-        else:
-            wx.CallAfter(self.log.AppendText, "🎥 Перекодирование видео: отключено пользователем\n")
-            # не конвертировать видео
-            cmd = [
-                FFMPEG_PATH,
-                "-hide_banner",
-                "-y",
-                "-i",
-                self.input_file,
-                "-map",
-                "0:v:0",
-                "-map",
-                f"0:a:{audio_index}",
-                "-c:v",
-                "copy",
-                *audio_codec_args,
-                "-map_metadata",
-                "-1",
-                "-sn",
-                # "-movflags",
-                # "+faststart",
-                self.output_file,
-            ]
-
-        self.process = subprocess.Popen(
-            cmd,
-            stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-
-        total_duration = self.duration or 1
-        time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
-        time_elapsed_regex = re.compile(r"elapsed=(\d+):(\d+):(\d+)\.\d+")
-        speed_regex = re.compile(r"speed=\s*([\d\.]+)x")
-        fps_regex = re.compile(r"fps=\s*([\d\.]+)")
-
-        current_speed = "?"
-        current_fps = "?"
-
-        for line in self.process.stderr:
-            # показываем каждую строку из stderr в логе
-            if self.chk_debug.GetValue():
-                autoscroll = self.log.HasFocus()
-                if autoscroll:
-                    wx.CallAfter(self.log.AppendText, line)
-                else:
-                    self.log.GetParent().Freeze()
-                    wx.CallAfter(self.log.AppendText, line)
-                    self.log.GetParent().Thaw()
-
-            if self.process.poll() is not None:
-                break
-            match = time_regex.search(line)
-            if match:
-                h, m, s = match.groups()
-                current_time = int(h) * 3600 + int(m) * 60 + float(s)
-                progress = min(int(current_time / total_duration * 100), 100)
-
-                # Парсим скорость
-                speed_match = speed_regex.search(line)
-                if speed_match:
-                    current_speed = speed_match.group(1) + "x"
-
-                # Парсим FPS
-                fps_match = fps_regex.search(line)
-                if fps_match:
-                    current_fps = fps_match.group(1)
-
-                elapsed_time_match = time_elapsed_regex.search(line)
-                if elapsed_time_match:
-                    elapsed_time = elapsed_time_match.group(1) + ":" + elapsed_time_match.group(2) + ":" + elapsed_time_match.group(3)
-
-                # Обновляем GUI
-                wx.CallAfter(self.progress.SetValue, progress)
-                wx.CallAfter(
-                    self.progress_label.SetLabel,
-                    f"Прогресс: {progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps │ ⏱ {elapsed_time}",
-                )
-
-        if self.process and self.process.poll() is None:
-            self.process.wait()
-
-        wx.CallAfter(self.progress.SetValue, 0)
-        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
-        wx.CallAfter(self.progress_label.SetLabel, "✅ Завершено │ ⚡ 1.0x │ 🎞️ — fps")
-        wx.CallAfter(self.log.AppendText, f"\nРабота завершена: {self.output_file}\n")
-        self.converting = False
-        self.process = None
-        self.enable_interface()
-
-    # --- Отмена конвертации ---
-    def cancel_conversion(self):
-        if self.process and self.process.poll() is None:
-            try:
-                self.log.AppendText("\n⏹ Отмена конвертации...\n")
-                self.process.terminate()
-                time.sleep(0.5)
-                if self.process.poll() is None:
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(self.process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                self.log.AppendText("❌ Конвертация отменена пользователем.\n")
-            except Exception as e:
-                self.log.AppendText(f"Ошибка при завершении процесса: {e}\n")
-
-        # Удаляем неполный файл
-        if self.output_file and os.path.exists(self.output_file):
-            try:
-                os.remove(self.output_file)
-                self.log.AppendText(f"🗑 Удалён неполный файл: {os.path.basename(self.output_file)}\n")
-            except Exception as e:
-                self.log.AppendText(f"⚠️ Не удалось удалить {self.output_file}: {e}\n")
-
-        self.process = None
-        self.converting = False
-        wx.CallAfter(self.progress.SetValue, 0)
-        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
-        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем │ ⚡ 1.0x │ 🎞️ — fps")
-
-    # --- Закрытие окна ---
-    def on_close(self, event):
-        if self.converting:
-            res = wx.MessageBox(
-                "Конвертация ещё выполняется. Остановить и выйти?",
-                "Подтверждение",
-                wx.YES_NO | wx.ICON_WARNING,
-            )
-            if res != wx.YES:
-                event.Veto()
-                return
-            else:
-                self.cancel_conversion()
-        self.Destroy()
-
-    # --- Отключить интерфейс ---
-    def disable_interface(self):
-        self.btn_browse.Disable()
-        self.qp_slider.Disable()
-        self.audio_choice.Disable()
-        self.encode_mode.Disable()
-
-    # --- Включить интерфейс ---
-    def enable_interface(self):
-        self.btn_browse.Enable()
-        self.qp_slider.Enable()
-        self.audio_choice.Enable()
-        self.encode_mode.Enable()
-
-    # --- Блокировка интерфейса ---
     def on_skip_video(self, event):
         if self.chk_skip_video.GetValue():
             self.chk_limit_res.Disable()
@@ -976,21 +717,391 @@ class VideoConverter(wx.Frame):
             self.encode_mode.Enable()
         self.Layout()
 
+    # --- Rows ---
+    def _add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
+        row = self.list.GetItemCount()
 
-# --- Drag&Drop класс ---
-class FileDropTarget(wx.FileDropTarget):
-    def __init__(self, frame):
-        super().__init__()
-        self.frame = frame
+        filename = os.path.basename(path)
+        self.list.InsertStringItem(row, filename)
 
-    def OnDropFiles(self, x, y, filenames):
-        if filenames:
-            self.frame.set_input_file(filenames)
+        self.list.SetStringItem(row, self.COL_RES, resolution)
+        self.list.SetStringItem(row, self.COL_BR, bitrate)
+        self.list.SetStringItem(row, self.COL_TIME, format_time(duration))
+        self.list.SetStringItem(row, self.COL_SIZE, human_size(size_bytes))
+        self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
+
+        choice = wx.Choice(self.list, choices=audio_choices)
+        if audio_choices:
+            choice.SetSelection(0)
+        self.list.SetItemWindow(row, self.COL_AUDIO, choice, expand=True)
+
+        gauge = wx.Gauge(self.list, range=100, size=self.FromDIP(wx.Size(-1, 18)), style=wx.GA_HORIZONTAL)
+        gauge.SetValue(0)
+        self.list.SetItemWindow(row, self.COL_PROGRESS, gauge, expand=True)
+
+        self.row_widgets[row] = {
+            "path": path,
+            "choice": choice,
+            "gauge": gauge,
+            "duration": float(duration or 0.0),
+        }
+
+    # --- Queue ---
+    def on_convert(self, event):
+        if self.converting:
+            self.cancel_conversion()
+            return
+
+        if not self.row_widgets:
+            self.log.AppendText("\n⚠ Нет файлов в очереди.\n")
+            return
+
+        self.all_jobs_duration = sum(float(self.row_widgets[r].get("duration") or 0.0) for r in self.row_widgets)
+        self.done_duration = 0.0
+        self.cancel_event.clear()
+        self.converting = True
+
+        self.btn_start.SetLabel("⏹ Отмена")
+        self.progress.SetValue(0)
+        self.progress_label.SetLabel("Прогресс: 0%")
+        self.log.AppendText("\n▶ Запуск очереди...\n")
+
+        self.disable_interface()
+
+        self.queue_thread = threading.Thread(target=self._queue_worker, daemon=True)
+        self.queue_thread.start()
+
+    def _queue_worker(self):
+        self.current_output_file = None
+        try:
+            for row in sorted(self.row_widgets.keys()):
+                if self.cancel_event.is_set():
+                    break
+
+                w = self.row_widgets[row]
+                path = w.get("path")
+                duration = float(w.get("duration") or 0.0)
+                gauge: wx.Gauge | None = w.get("gauge")
+                choice: wx.Choice | None = w.get("choice")
+                if not path or not os.path.isfile(path):
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет файла")
+                    if gauge:
+                        wx.CallAfter(gauge.SetValue, 0)
+                    continue
+
+                selected_track = choice.GetSelection() if choice else wx.NOT_FOUND
+                if selected_track == wx.NOT_FOUND:
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет аудио")
+                    if gauge:
+                        wx.CallAfter(gauge.SetValue, 0)
+                    continue
+
+                audio_channels = get_audio_channels(path, selected_track)
+                bitrate = get_audio_bitrate(audio_channels)
+                output_file = unique_output_path(path)
+
+                wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏳ Конвертация...")
+                if gauge:
+                    wx.CallAfter(gauge.SetValue, 0)
+
+                wx.CallAfter(self.log.AppendText, f"\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
+                self.current_output_file = output_file
+
+                ok = self.run_ffmpeg_with_progress(
+                    input_path=path,
+                    output_path=output_file,
+                    selected_track=selected_track,
+                    bitrate=bitrate,
+                    audio_channels=audio_channels,
+                    duration=duration,
+                    gauge=gauge,
+                )
+
+                if ok and not self.cancel_event.is_set():
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
+                    wx.CallAfter(gauge.SetValue, 100)
+                    self.done_duration += duration
+                elif self.cancel_event.is_set():
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
+                    wx.CallAfter(gauge.SetValue, 100)
+                    break
+                else:
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Ошибка")
+                    self.done_duration += duration
+
+            if self.cancel_event.is_set():
+                wx.CallAfter(self.progress_label.SetLabel, "⏹ Очередь остановлена пользователем")
+            else:
+                wx.CallAfter(self.progress.SetValue, 100)
+                wx.CallAfter(self.progress_label.SetLabel, "✅ Очередь завершена")
+
+        finally:
+            self.converting = False
+            self.process = None
+            wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
+            wx.CallAfter(self.progress.SetValue, 0)
+            wx.CallAfter(self.enable_interface)
+
+    # --- FFmpeg ---
+    def run_ffmpeg_with_progress(
+        self,
+        input_path: str,
+        output_path: str,
+        selected_track: int,
+        bitrate: str,
+        audio_channels: int,
+        duration: float,
+        gauge: wx.Gauge | None,
+    ) -> bool:
+        # audio
+        if self.chk_skip_audio.GetValue():
+            audio_codec_args = ["-c:a", "copy"]
+            wx.CallAfter(self.log.AppendText, "🎵 Аудио: copy\n")
+        else:
+            audio_codec_args = ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate]
+            wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
+
+        # video
+        if not self.chk_skip_video.GetValue():
+            hdr = get_hdr_info(input_path)
+            hdr_type = hdr["type"]
+            auto_tonemap = bool(hdr["requires_tonemap"])
+
+            tonemap_mode = self.choice_tonemap.GetSelection()  # 0 авто, 1 вкл, 2 выкл
+            if tonemap_mode == 2:
+                needs_tonemap = False
+            elif tonemap_mode == 1:
+                needs_tonemap = True
+            else:
+                needs_tonemap = auto_tonemap
+
+            wx.CallAfter(self.log.AppendText, f"🎨 Видео: {hdr_type}, tonemap={'on' if needs_tonemap else 'off'}\n")
+
+            scale_filter = ""
+            if self.chk_limit_res.GetValue():
+                vinfo = get_video_info(input_path)
+                try:
+                    w = int(vinfo.get("width") or 0)
+                    h = int(vinfo.get("height") or 0)
+                except Exception:
+                    w, h = 0, 0
+                if w > 1920 or h > 1080:
+                    scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
+
+            if needs_tonemap:
+                vf_filter = (
+                    "zscale=t=linear:npl=30,format=gbrpf32le,"
+                    "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
+                    "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
+                    f"{scale_filter}"
+                )
+            else:
+                vf_filter = f"format=yuv420p{scale_filter}"
+
+            mode = self.encode_mode.GetSelection()
+            if mode == 0:
+                video_codec_args = ["-rc", "vbr", "-cq", str(self.qp_value), "-b:v", "0", "-qmin", "0"]
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: CQ={self.qp_value}\n")
+            else:
+                target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
+                video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                wx.CallAfter(self.log.AppendText, f"📦 Режим: CBR={target_bitrate}\n")
+
+            cmd = [
+                FFMPEG_PATH,
+                "-hide_banner",
+                "-y",
+                "-i",
+                input_path,
+                "-map",
+                "0:v:0",
+                "-map",
+                f"0:a:{selected_track}",
+                "-c:v",
+                "h264_nvenc",
+                "-pix_fmt",
+                "yuv420p",
+                "-vf",
+                vf_filter,
+                "-preset",
+                "p4",
+                *video_codec_args,
+                "-profile:v",
+                "high",
+                "-tune",
+                "hq",
+                "-b_ref_mode",
+                "middle",
+                "-spatial_aq",
+                "1",
+                *audio_codec_args,
+                "-map_metadata",
+                "-1",
+                "-sn",
+                output_path,
+            ]
+        else:
+            wx.CallAfter(self.log.AppendText, "🎥 Видео: copy\n")
+            cmd = [
+                FFMPEG_PATH,
+                "-hide_banner",
+                "-y",
+                "-i",
+                input_path,
+                "-map",
+                "0:v:0",
+                "-map",
+                f"0:a:{selected_track}",
+                "-c:v",
+                "copy",
+                *audio_codec_args,
+                "-map_metadata",
+                "-1",
+                "-sn",
+                output_path,
+            ]
+
+        # запуск (консоль НЕ скрываем)
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except Exception as e:
+            wx.CallAfter(self.log.AppendText, f"❌ Не удалось запустить ffmpeg: {e}\n")
+            return False
+
+        total_duration = max(float(duration or 0.0), 1.0)
+        time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+        speed_regex = re.compile(r"speed=\s*([\d\.]+)x")
+        fps_regex = re.compile(r"fps=\s*([\d\.]+)")
+
+        current_speed = "?"
+        current_fps = "?"
+
+        for line in self.process.stderr:
+            if self.cancel_event.is_set():
+                break
+
+            if self.chk_debug.GetValue():
+                wx.CallAfter(self.log.AppendText, line)
+
+            m = time_regex.search(line)
+            if not m:
+                continue
+
+            h, mm, ss = m.groups()
+            current_time = int(h) * 3600 + int(mm) * 60 + float(ss)
+
+            row_progress = min(int(current_time / total_duration * 100), 100)
+
+            overall = self.done_duration + current_time
+            if self.all_jobs_duration > 0:
+                overall_progress = min(int(overall / self.all_jobs_duration * 100), 100)
+            else:
+                overall_progress = row_progress
+
+            sm = speed_regex.search(line)
+            if sm:
+                current_speed = sm.group(1) + "x"
+            fm = fps_regex.search(line)
+            if fm:
+                current_fps = fm.group(1)
+
+            wx.CallAfter(self.progress.SetValue, overall_progress)
+            if gauge:
+                wx.CallAfter(gauge.SetValue, row_progress)
+
+            wx.CallAfter(
+                self.progress_label.SetLabel,
+                f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps",
+            )
+
+        # cancel
+        if self.cancel_event.is_set():
+            try:
+                self.process.terminate()
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+        rc = self.process.wait() if self.process else -1
+        if self.cancel_event.is_set():
+            return False
+
+        if rc != 0:
+            wx.CallAfter(self.log.AppendText, f"❌ FFmpeg завершился с кодом {rc}\n")
+            return False
 
         return True
 
+    # --- Cancel / close ---
+    def cancel_conversion(self):
+        self.cancel_event.set()
+        if self.process and self.process.poll() is None:
+            try:
+                self.log.AppendText("\n⏹ Отмена конвертации...\n")
+                self.process.terminate()
+                time.sleep(0.5)
+                try:
+                    if self.process.poll() is None and sys.platform.startswith("win"):
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                except Exception:
+                    pass
+                self.log.AppendText("⏹ Остановлено.\n")
+            except Exception as e:
+                self.log.AppendText(f"⚠ Ошибка при завершении процесса: {e}\n")
 
-# --- Запуск ---
+        # удалить текущий неполный файл
+        if self.current_output_file and os.path.exists(self.current_output_file):
+            try:
+                os.remove(self.current_output_file)
+                self.log.AppendText(f"🗑 Удалён неполный файл: {os.path.basename(self.current_output_file)}\n")
+            except Exception as e:
+                self.log.AppendText(f"⚠ Не удалось удалить {self.current_output_file}: {e}\n")
+
+        self.process = None
+        self.converting = False
+        wx.CallAfter(self.progress.SetValue, 0)
+        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
+        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем")
+
+    def on_close(self, event):
+        if self.converting:
+            res = wx.MessageBox(
+                "Конвертация ещё выполняется. Остановить и выйти?",
+                "Подтверждение",
+                wx.YES_NO | wx.ICON_WARNING,
+            )
+            if res != wx.YES:
+                event.Veto()
+                return
+            self.cancel_conversion()
+        self.Destroy()
+
+    def disable_interface(self):
+        self.btn_add.Disable()
+        self.btn_remove.Disable()
+        self.btn_clear.Disable()
+        self.qp_slider.Disable()
+        self.encode_mode.Disable()
+
+    def enable_interface(self):
+        self.btn_add.Enable()
+        self.btn_remove.Enable()
+        self.btn_clear.Enable()
+        self.qp_slider.Enable()
+        self.encode_mode.Enable()
+
+
 if __name__ == "__main__":
     app = wx.App(False)
     top = VideoConverter()
