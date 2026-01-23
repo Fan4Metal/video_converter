@@ -402,7 +402,7 @@ class VideoConverter(wx.Frame):
         # top buttons
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add = wx.Button(panel, label="Добавить файлы...")
-        self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_file)
+        self.btn_add.Bind(wx.EVT_BUTTON, self.browse_files)
 
         self.btn_remove = wx.Button(panel, label="Удалить")
         self.btn_remove.Bind(wx.EVT_BUTTON, self.on_remove_selected)
@@ -436,6 +436,9 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
         self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(140))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
+
+        self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.onPlayFile)
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
@@ -564,7 +567,7 @@ class VideoConverter(wx.Frame):
         self.Show()
 
     # --- UI actions ---
-    def on_add_file(self, event):
+    def browse_files(self, event):
         with wx.FileDialog(
             self,
             "Выбери видеофайлы",
@@ -716,6 +719,19 @@ class VideoConverter(wx.Frame):
             self.qp_slider.Enable()
             self.encode_mode.Enable()
         self.Layout()
+
+    def on_key_down(self, event):
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self.on_remove_selected(event)
+
+    def onPlayFile(self, event):
+        row = self.list.GetFirstSelected()
+        if row == -1:
+            return
+
+        path = self.row_widgets.get(row).get("path")
+        if os.path.isfile(path):
+            subprocess.Popen(f'"{path}"', shell=True)
 
     # --- Rows ---
     def _add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
