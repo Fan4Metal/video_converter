@@ -167,9 +167,6 @@ def get_audio_channels(input_file: str, selected_track: int) -> int:
 def get_hdr_info(file_path: str) -> dict:
     """
     Упрощённый HDR анализ.
-    Важно: у тебя в исходнике был баг — ты вызывал ffprobe только stream_tags,
-    но потом пытался читать поля stream['color_transfer'] и т.п. (их там не было).
-    Я расширил show_entries, чтобы эти поля реально пришли.
     """
     result = {
         "is_hdr": False,
@@ -399,7 +396,7 @@ class VideoConverter(wx.Frame):
         # layout
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        # top buttons
+        # кнопки добавления/удаления/очистки
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add = wx.Button(panel, label="Добавить файлы...")
         self.btn_add.Bind(wx.EVT_BUTTON, self.browse_files)
@@ -420,7 +417,7 @@ class VideoConverter(wx.Frame):
         top.AddStretchSpacer(1)
         vbox.Add(top, 0, wx.EXPAND)
 
-        # UltimateListCtrl
+        # UltimateListCtrl - список файлов
         self.list = ULC.UltimateListCtrl(
             panel,
             agwStyle=(
@@ -445,7 +442,7 @@ class VideoConverter(wx.Frame):
         # --- encode_mode + quality на одной строке ---
         encode_row = wx.BoxSizer(wx.HORIZONTAL)
 
-        # encode mode (слева)
+        # режим кодирования (слева)
         self.encode_mode = wx.RadioBox(
             panel,
             label="Режим кодирования",
@@ -461,7 +458,7 @@ class VideoConverter(wx.Frame):
 
         encode_row.Add(self.encode_mode, 0, wx.ALL | wx.ALIGN_TOP, self.FromDIP(5))
 
-        # quality (справа)
+        # слайдер качества (справа)
         vbox_quality = wx.BoxSizer(wx.HORIZONTAL)
 
         self.slider_label = wx.StaticText(panel, label="Качество, QP:", size=self.FromDIP(wx.Size(90, -1)))
@@ -487,7 +484,7 @@ class VideoConverter(wx.Frame):
         # добавляем всю строку в главный vbox
         vbox.Add(encode_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, self.FromDIP(5))
 
-        # options
+        # опции
         options_box = wx.BoxSizer(wx.HORIZONTAL)
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
@@ -518,7 +515,7 @@ class VideoConverter(wx.Frame):
 
         vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT | wx.BOTTOM, self.FromDIP(10))
 
-        # buttons bottom
+        # кнопки запуска и открытия лога
         btn_box = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_start = wx.Button(panel, label="▶ Начать конвертацию")
         self.btn_start.Bind(wx.EVT_BUTTON, self.on_convert)
@@ -531,14 +528,17 @@ class VideoConverter(wx.Frame):
         btn_box.Add(self.btn_toggle_log, 0, wx.ALL, self.FromDIP(5))
         vbox.Add(btn_box, 0, wx.EXPAND)
 
+        # прогрессбар
         self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL)
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
+        # прогресс и статус
         self.progress_label = wx.StaticText(panel, label="Прогресс: 0%")
         vbox.Add(self.progress_label, 0, wx.LEFT | wx.BOTTOM, self.FromDIP(5))
 
+        # лог
         self.log = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2, size=self.FromDIP(wx.Size(-1, 200)))
-        self.log.Hide()
+        self.log.Hide()  # скрыть по умолчанию
         vbox.Add(self.log, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
         panel.SetSizer(vbox)
@@ -552,9 +552,6 @@ class VideoConverter(wx.Frame):
             except Exception:
                 pass
         self.Centre()
-
-        # Скрываем лог по умолчанию как у тебя
-        # self.on_toggle_log(None)
 
         # проверка ffmpeg/ffprobe
         if not os.path.isfile(FFMPEG_PATH):
@@ -598,7 +595,7 @@ class VideoConverter(wx.Frame):
                 f"🔹Длительность: {format_time(info['duration'])} ({info['duration']:.1f} сек)\n"
             )
 
-            self._add_row(
+            self.add_row(
                 path=path,
                 resolution=f"{info['width']}×{info['height']}",
                 bitrate=str(info["bitrate"]),
@@ -734,7 +731,7 @@ class VideoConverter(wx.Frame):
             subprocess.Popen(f'"{path}"', shell=True)
 
     # --- Rows ---
-    def _add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
+    def add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
         row = self.list.GetItemCount()
 
         filename = os.path.basename(path)
@@ -977,8 +974,6 @@ class VideoConverter(wx.Frame):
                 "-sn",
                 output_path,
             ]
-
-        # запуск (консоль НЕ скрываем)
         try:
             self.process = subprocess.Popen(
                 cmd,
