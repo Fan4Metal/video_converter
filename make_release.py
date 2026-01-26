@@ -65,14 +65,15 @@ def main():
             "--add-data=images\\favicon.png;.\\images",
             "--add-data=ffprobe.exe;.",
             "--add-data=ffmpeg.exe;.",
+            "--add-data=mpv.exe;.",
             "--name=VC",
             "main.py",
         ]
         run_command(pyinstaller_cmd)
 
-        # Шаг 3: Обновляем версию в vc.iss
+        # Шаг 3: Обновляем версию в setup.iss
         print("\n=== Обновление версии в Inno Setup ===")
-        update_iss_version(".\\dist\\vc.iss", version)
+        update_iss_version(".\\setup.iss", version)
 
         # Шаг 4: Компилируем установщик Inno Setup
         print("\n=== Компиляция установщика ===")
@@ -82,7 +83,7 @@ def main():
         iscc_found = False
         for iscc_path in iscc_paths:
             if Path(iscc_path).exists():
-                iscc_cmd = [iscc_path, ".\\dist\\vc.iss"]
+                iscc_cmd = [iscc_path, ".\\setup.iss"]
                 run_command(iscc_cmd)
                 iscc_found = True
                 break
@@ -90,7 +91,7 @@ def main():
         if not iscc_found:
             # Если не нашли ISCC в стандартных путях, используем команду напрямую
             print("ISCC не найден в стандартных путях, пытаемся запустить через PATH...")
-            run_command(["ISCC", ".\\dist\\vc.iss"])
+            run_command(["ISCC", ".\\setup.iss"])
 
         print(f"\n=== Выпуск версии {version} успешно создан! ===")
 
