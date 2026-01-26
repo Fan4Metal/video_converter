@@ -32,6 +32,7 @@ def get_resource_path(relative_path: str) -> str:
 
 FFMPEG_PATH = get_resource_path("ffmpeg.exe")
 FFPROBE_PATH = get_resource_path("ffprobe.exe")
+MPV_PATH = get_resource_path("mpv.exe")
 
 
 def format_time(seconds: float) -> str:
@@ -435,7 +436,7 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
 
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
-        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.onPlayFile)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
@@ -562,6 +563,7 @@ class VideoConverter(wx.Frame):
             self.btn_start.Disable()
 
         self.Show()
+        # self.add_files([R"D:\Films\testing\test1.mkv"])
 
     # --- UI actions ---
     def browse_files(self, event):
@@ -721,14 +723,40 @@ class VideoConverter(wx.Frame):
         if event.GetKeyCode() == wx.WXK_DELETE:
             self.on_remove_selected(event)
 
-    def onPlayFile(self, event):
+    def on_play_file(self, event):
         row = self.list.GetFirstSelected()
         if row == -1:
             return
+        widgets = self.row_widgets.get(row)
+        if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
+            output_file = widgets.get("output_file")
+            if os.path.isfile(output_file):
+                subprocess.Popen(
+                    [
+                        MPV_PATH,
+                        output_file,
+                        "--title=Сконвертированный файл: ${filename}",
+                        "--no-sub",
+                    ],
+                )
+                return
 
-        path = self.row_widgets.get(row).get("path")
+        path = widgets.get("path")
         if os.path.isfile(path):
-            subprocess.Popen(f'"{path}"', shell=True)
+            audio_stream_num = widgets.get("choice").GetSelection() + 1
+            subprocess.Popen(
+                [
+                    MPV_PATH,
+                    path,
+                    f"--aid={str(audio_stream_num)}",
+                    (
+                        "--title=${filename} — [Аудио #${current-tracks/audio/id}]:"
+                        "${current-tracks/audio/title:Без названия} (${current-tracks/audio/lang:-}), "
+                        "каналов: ${current-tracks/audio/audio-channels:?}, кодек: ${current-tracks/audio/codec}"
+                    ),
+                    "--no-sub",
+                ],
+            )
 
     # --- Rows ---
     def add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
@@ -791,11 +819,11 @@ class VideoConverter(wx.Frame):
                 if self.cancel_event.is_set():
                     break
 
-                w = self.row_widgets[row]
-                path = w.get("path")
-                duration = float(w.get("duration") or 0.0)
-                gauge: wx.Gauge | None = w.get("gauge")
-                choice: wx.Choice | None = w.get("choice")
+                widgets = self.row_widgets[row]
+                path = widgets.get("path")
+                duration = float(widgets.get("duration") or 0.0)
+                gauge: wx.Gauge | None = widgets.get("gauge")
+                choice: wx.Choice | None = widgets.get("choice")
                 if not path or not os.path.isfile(path):
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет файла")
                     if gauge:
@@ -831,9 +859,10 @@ class VideoConverter(wx.Frame):
                 )
 
                 if ok and not self.cancel_event.is_set():
+                    widgets.update({"output_file": output_file})
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
-                    wx.CallAfter(self.log.AppendText, f"\nКонвертация завершена.")
+                    wx.CallAfter(self.log.AppendText, f"\n ✅ Конвертация завершена\n")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
