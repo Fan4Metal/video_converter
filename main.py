@@ -544,8 +544,10 @@ class VideoConverter(wx.Frame):
 
         panel.SetSizer(vbox)
 
-        self.SetSize(self.FromDIP(wx.Size(1400, 670)))
-        self.SetMinSize(self.GetSize())
+        self.size_no_log = self.FromDIP(wx.Size(1400, 670))
+        self.size_log = self.FromDIP(wx.Size(1400, 875))  # +205
+        self.SetSize(self.size_no_log)
+        self.SetMinSize(self.size_no_log)
         icon_path = get_resource_path("images/favicon.png")
         if os.path.isfile(icon_path):
             try:
@@ -689,15 +691,16 @@ class VideoConverter(wx.Frame):
             self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
 
     def on_toggle_log(self, event):
-        current_size = self.ToDIP(self.GetSize())
         if self.log_visible:
             self.log.Hide()
-            self.SetSize(self.FromDIP(wx.Size(-1, current_size.height - 205)))
+            self.SetMinSize(self.size_no_log)
+            self.SetSize(self.size_no_log)
             self.btn_toggle_log.SetLabel("📋 Показать лог")
             self.Layout()
         else:
             self.log.Show()
-            self.SetSize(self.FromDIP(wx.Size(-1, current_size.height + 205)))
+            self.SetMinSize(self.size_log)
+            self.SetSize(self.size_log)
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
             self.Layout()
         self.log_visible = not self.log_visible
