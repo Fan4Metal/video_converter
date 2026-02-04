@@ -983,6 +983,8 @@ class VideoConverter(wx.Frame):
                 *audio_codec_args,
                 "-map_metadata",
                 "-1",
+                "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
+                "filter_units=remove_types=6",
                 "-sn",
                 output_path,
             ]
@@ -1003,6 +1005,8 @@ class VideoConverter(wx.Frame):
                 *audio_codec_args,
                 "-map_metadata",
                 "-1",
+                "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
+                "filter_units=remove_types=6",
                 "-sn",
                 output_path,
             ]
