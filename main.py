@@ -6,10 +6,10 @@ import subprocess
 import sys
 import threading
 import time
+import winreg
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
-
 
 # --- HiDPI (Windows only) ---
 if sys.platform.startswith("win"):
@@ -33,6 +33,30 @@ def get_resource_path(relative_path: str) -> str:
 FFMPEG_PATH = get_resource_path("ffmpeg.exe")
 FFPROBE_PATH = get_resource_path("ffprobe.exe")
 MPV_PATH = get_resource_path("mpv.exe")
+
+
+def save_reg(name: str, data: str):
+    """
+    Сохраняет в реестре параметры приложения.
+    "save_path" - путь к папке для сохранения файлов.
+    """
+
+    soft = winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, "SOFTWARE")
+    key = winreg.CreateKey(soft, "video_converter")
+    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, data)
+    if key:
+        winreg.CloseKey(key)
+
+
+def get_reg(name):
+    reg_path = R"SOFTWARE\video_converter"
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ)
+        value = winreg.QueryValueEx(key, name)[0]
+        winreg.CloseKey(key)
+        return value
+    except WindowsError:
+        return
 
 
 def format_time(seconds: float) -> str:
@@ -332,18 +356,31 @@ def get_video_info(filepath: str) -> dict:
     return info
 
 
-def unique_output_path(input_path: str) -> str:
-    base = os.path.splitext(input_path)[0] + "_conv"
-    ext = ".mp4"
-    out = base + ext
-    if not os.path.exists(out):
-        return out
-    n = 2
-    while True:
-        candidate = f"{base}_{n}{ext}"
-        if not os.path.exists(candidate):
-            return candidate
-        n += 1
+def unique_output_path(save_folder: str, input_path: str) -> str:
+    if not save_folder or not os.path.isdir(save_folder):
+        base = os.path.splitext(input_path)[0] + "_conv"
+        ext = ".mp4"
+        out = base + ext
+        if not os.path.exists(out):
+            return out
+        n = 2
+        while True:
+            candidate = f"{base}_{n}{ext}"
+            if not os.path.exists(candidate):
+                return candidate
+            n += 1
+    else:
+        base = os.path.splitext(os.path.basename(input_path))[0]
+        ext = ".mp4"
+        out = os.path.join(save_folder, base + "_conv" + ext)
+        if not os.path.exists(out):
+            return out
+        n = 2
+        while True:
+            candidate = os.path.join(save_folder, f"{base}_{n}{ext}")
+            if not os.path.exists(candidate):
+                return candidate
+            n += 1
 
 
 # --- Drag&Drop класс ---
@@ -389,6 +426,7 @@ class VideoConverter(wx.Frame):
         self.all_jobs_duration = 0.0
         self.done_duration = 0.0
         self.current_output_file: str | None = None
+        self.save_folder: str | None = None
 
         self.qp_value = 22
         self.bitrate_value = 8
@@ -408,14 +446,19 @@ class VideoConverter(wx.Frame):
         self.btn_clear = wx.Button(panel, label="Очистить")
         self.btn_clear.Bind(wx.EVT_BUTTON, self.on_clear)
 
-        self.btn_add.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
-        self.btn_remove.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
-        self.btn_clear.SetMinSize(self.FromDIP(wx.Size(-1, 28)))
+        self.save_folder_label = wx.StaticText(panel, label="Сохранять в: ", size=self.FromDIP(wx.Size(-1, 28)))
+        self.save_folder_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
+        self.btn_save_folder_browse = wx.Button(panel, label="Выбрать папку...")
+        self.btn_save_folder_browse.Bind(wx.EVT_BUTTON, self.browse_save_folder)
 
-        top.Add(self.btn_add, 0, wx.ALL, self.FromDIP(5))
-        top.Add(self.btn_remove, 0, wx.ALL, self.FromDIP(5))
-        top.Add(self.btn_clear, 0, wx.ALL, self.FromDIP(5))
-        top.AddStretchSpacer(1)
+        top.Add(self.btn_add, 0, wx.ALL, self.FromDIP(8))
+        top.Add(self.btn_remove, 0, wx.ALL, self.FromDIP(8))
+        top.Add(self.btn_clear, 0, wx.ALL, self.FromDIP(8))
+        # top.AddStretchSpacer(1)
+        top.Add(self.save_folder_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
+        top.Add(self.save_folder_txt, 1, wx.ALL, self.FromDIP(8))
+        top.Add(self.btn_save_folder_browse, 0, wx.ALL, self.FromDIP(8))
+
         vbox.Add(top, 0, wx.EXPAND)
 
         # UltimateListCtrl - список файлов
@@ -438,7 +481,7 @@ class VideoConverter(wx.Frame):
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
 
-        vbox.Add(self.list, 1, wx.EXPAND | wx.ALL, self.FromDIP(5))
+        vbox.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
         # --- encode_mode + quality на одной строке ---
         encode_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -564,8 +607,20 @@ class VideoConverter(wx.Frame):
             self.log.AppendText("❌ Не найден ffprobe.exe\n")
             self.btn_start.Disable()
 
+        # загрузка папки для сохранения
+        _save_path = get_reg("save_path")
+        if _save_path and os.path.isdir(_save_path):
+            self.save_folder_txt.SetValue(_save_path)
+            self.save_folder = _save_path
+
         self.Show()
-        # self.add_files([R"D:\Films\testing\test1.mkv"])
+
+        # self.add_files(
+        #     [
+        #         R"D:\Films\testing\test1.mkv",
+        #         R"D:\Films\testing\test2.mkv",
+        #     ]
+        # )
 
     # --- UI actions ---
     def browse_files(self, event):
@@ -842,7 +897,7 @@ class VideoConverter(wx.Frame):
 
                 audio_channels = get_audio_channels(path, selected_track)
                 bitrate = get_audio_bitrate(audio_channels)
-                output_file = unique_output_path(path)
+                output_file = unique_output_path(self.save_folder, path)
 
                 wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏳ Конвертация...")
                 if gauge:
@@ -1149,6 +1204,17 @@ class VideoConverter(wx.Frame):
         self.btn_clear.Enable()
         self.qp_slider.Enable()
         self.encode_mode.Enable()
+
+    def browse_save_folder(self, event):
+        with wx.DirDialog(
+            self,
+            "Выберите папку для сохранения конвертируемых файлов",
+            style=wx.DD_DEFAULT_STYLE,
+        ) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                path = dlg.GetPath()
+                self.save_folder_txt.SetValue(path)
+                save_reg("save_path", path)
 
 
 if __name__ == "__main__":
