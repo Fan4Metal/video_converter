@@ -617,7 +617,7 @@ class VideoConverter(wx.Frame):
         if row == -1:
             return
 
-        self._delete_row(row)
+        self.delete_row(row)
 
     def on_clear(self, event):
         if self.converting:
@@ -639,7 +639,7 @@ class VideoConverter(wx.Frame):
         self.row_widgets.clear()
         self.log.AppendText("\n🧹 Список очищен.\n")
 
-    def _delete_row(self, row: int):
+    def delete_row(self, row: int):
         w = self.row_widgets.get(row)
         if w:
             try:
@@ -812,10 +812,10 @@ class VideoConverter(wx.Frame):
 
         self.disable_interface()
 
-        self.queue_thread = threading.Thread(target=self._queue_worker, daemon=True)
+        self.queue_thread = threading.Thread(target=self.queue_worker, daemon=True)
         self.queue_thread.start()
 
-    def _queue_worker(self):
+    def queue_worker(self):
         self.current_output_file = None
         try:
             for row in sorted(self.row_widgets.keys()):
