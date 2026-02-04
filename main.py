@@ -18,7 +18,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.1"
+__VERSION__ = "0.2.2"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -1002,7 +1002,7 @@ class VideoConverter(wx.Frame):
             mode = self.encode_mode.GetSelection()
             if mode == 0:
                 video_codec_args = ["-rc", "vbr", "-cq", str(self.qp_value), "-b:v", "0", "-qmin", "0"]
-                wx.CallAfter(self.log.AppendText, f"🎯 Режим: CQ={self.qp_value}\n")
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: QP={self.qp_value}\n")
             else:
                 target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
                 video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
@@ -1197,6 +1197,7 @@ class VideoConverter(wx.Frame):
         self.btn_clear.Disable()
         self.qp_slider.Disable()
         self.encode_mode.Disable()
+        self.btn_save_folder_browse.Disable()
 
     def enable_interface(self):
         self.btn_add.Enable()
@@ -1204,6 +1205,7 @@ class VideoConverter(wx.Frame):
         self.btn_clear.Enable()
         self.qp_slider.Enable()
         self.encode_mode.Enable()
+        self.btn_save_folder_browse.Enable()
 
     def browse_save_folder(self, event):
         with wx.DirDialog(
@@ -1214,6 +1216,7 @@ class VideoConverter(wx.Frame):
             if dlg.ShowModal() == wx.ID_OK:
                 path = dlg.GetPath()
                 self.save_folder_txt.SetValue(path)
+                self.save_folder = path
                 save_reg("save_path", path)
 
 
