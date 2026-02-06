@@ -403,8 +403,9 @@ class VideoConverter(wx.Frame):
     COL_SIZE = 3
     COL_TIME = 4
     COL_AUDIO = 5
-    COL_STATUS = 6
-    COL_PROGRESS = 7
+    COL_SETTINGS = 6
+    COL_STATUS = 7
+    COL_PROGRESS = 8
 
     def __init__(self):
         super().__init__(
@@ -465,7 +466,7 @@ class VideoConverter(wx.Frame):
         self.list = ULC.UltimateListCtrl(
             panel,
             agwStyle=(
-                wx.LC_REPORT | wx.LC_HRULES | wx.LC_VRULES | wx.LC_SINGLE_SEL | ULC.ULC_HAS_VARIABLE_ROW_HEIGHT | ULC.ULC_SHOW_TOOLTIPS
+                wx.LC_REPORT | wx.LC_HRULES | wx.LC_VRULES | wx.LC_NO_SORT_HEADER | ULC.ULC_HAS_VARIABLE_ROW_HEIGHT | ULC.ULC_SHOW_TOOLTIPS
             ),
         )
 
@@ -475,11 +476,13 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_SIZE, "Размер", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
+        self.list.InsertColumn(self.COL_SETTINGS, "Параметры", width=self.FromDIP(170))
         self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(140))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
 
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_select)
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
@@ -533,6 +536,7 @@ class VideoConverter(wx.Frame):
 
         self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
         self.chk_limit_res.SetValue(False)
+        self.chk_limit_res.Bind(wx.EVT_CHECKBOX, self.on_limit_res)
         options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
         self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
@@ -540,6 +544,7 @@ class VideoConverter(wx.Frame):
 
         self.choice_tonemap = wx.Choice(panel, choices=["Авто", "Вкл", "Выкл"])
         self.choice_tonemap.SetSelection(0)
+        self.choice_tonemap.Bind(wx.EVT_CHOICE, self.on_tonemapping)
         options_box.Add(self.choice_tonemap, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
         self.chk_skip_video = wx.CheckBox(panel, label="не конв. видео")
@@ -551,6 +556,7 @@ class VideoConverter(wx.Frame):
         self.chk_skip_audio = wx.CheckBox(panel, label="не конв. аудио")
         self.chk_skip_audio.SetToolTip(wx.ToolTip("Не конвертировать аудио"))
         self.chk_skip_audio.SetValue(False)
+        self.chk_skip_audio.Bind(wx.EVT_CHECKBOX, self.on_skip_audio)
         options_box.Add(self.chk_skip_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
         self.chk_debug = wx.CheckBox(panel, label="Debug")
@@ -587,8 +593,8 @@ class VideoConverter(wx.Frame):
 
         panel.SetSizer(vbox)
 
-        self.size_no_log = self.FromDIP(wx.Size(1400, 670))
-        self.size_log = self.FromDIP(wx.Size(1400, 875))  # +205
+        self.size_no_log = self.FromDIP(wx.Size(1590, 670))
+        self.size_log = self.FromDIP(wx.Size(1590, 875))  # +205
         self.SetSize(self.size_no_log)
         self.SetMinSize(self.size_no_log)
         icon_path = get_resource_path("images/favicon.png")
@@ -615,12 +621,12 @@ class VideoConverter(wx.Frame):
 
         self.Show()
 
-        # self.add_files(
-        #     [
-        #         R"D:\Films\testing\test1.mkv",
-        #         R"D:\Films\testing\test2.mkv",
-        #     ]
-        # )
+        self.add_files(
+            [
+                R"D:\Films\testing\test1.mkv",
+                R"D:\Films\testing\test2.mkv",
+            ]
+        )
 
     # --- UI actions ---
     def browse_files(self, event):
@@ -735,6 +741,8 @@ class VideoConverter(wx.Frame):
             self.qp_label.SetLabel("Битрейт = 8.0 Мбит/с")
             self.bitrate_value = 8
 
+        self.save_settings_to_sel_rows_and_update_list()
+
     def on_qp_change(self, event):
         mode = self.encode_mode.GetSelection()
         val = self.qp_slider.GetValue()
@@ -744,6 +752,8 @@ class VideoConverter(wx.Frame):
         else:
             self.bitrate_value = val
             self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
+
+        self.save_settings_to_sel_rows_and_update_list()
 
     def on_toggle_log(self, event):
         if self.log_visible:
@@ -776,6 +786,7 @@ class VideoConverter(wx.Frame):
             self.qp_slider.Enable()
             self.encode_mode.Enable()
         self.Layout()
+        self.save_settings_to_sel_rows_and_update_list()
 
     def on_key_down(self, event):
         if event.GetKeyCode() == wx.WXK_DELETE:
@@ -828,6 +839,7 @@ class VideoConverter(wx.Frame):
         self.list.SetStringItem(row, self.COL_TIME, format_time(duration))
         self.list.SetStringItem(row, self.COL_SIZE, human_size(size_bytes))
         self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
+        self.list.SetStringItem(row, self.COL_SETTINGS, "⚙️Глобальные")
 
         choice = wx.Choice(self.list, choices=audio_choices)
         if audio_choices:
@@ -843,6 +855,15 @@ class VideoConverter(wx.Frame):
             "choice": choice,
             "gauge": gauge,
             "duration": float(duration or 0.0),
+            "settings": {
+                "global": True,
+                "encode_mode": "",
+                "qp_slider": "",
+                "limit_res": "",
+                "tonemapping": "",
+                "skip_video": "",
+                "skip_audio": "",
+            },
         }
 
     # --- Queue ---
@@ -906,6 +927,8 @@ class VideoConverter(wx.Frame):
                 wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
 
+                settings = self.row_widgets[row]["settings"]
+
                 ok = self.run_ffmpeg_with_progress(
                     input_path=path,
                     output_path=output_file,
@@ -914,6 +937,7 @@ class VideoConverter(wx.Frame):
                     audio_channels=audio_channels,
                     duration=duration,
                     gauge=gauge,
+                    settings=settings,
                 )
 
                 if ok and not self.cancel_event.is_set():
@@ -943,6 +967,16 @@ class VideoConverter(wx.Frame):
             wx.CallAfter(self.progress.SetValue, 0)
             wx.CallAfter(self.enable_interface)
 
+    def on_item_select(self, event):
+        item_index = self.list.GetFirstSelected()
+
+        while item_index != -1:
+            # Обрабатываем выбранный элемент
+            item_text = self.list.GetItemText(item_index)
+            print(f"Выбрана строка {item_index}: {item_text}")
+
+            item_index = self.list.GetNextSelected(item_index)
+
     # --- FFmpeg ---
     def run_ffmpeg_with_progress(
         self,
@@ -953,9 +987,27 @@ class VideoConverter(wx.Frame):
         audio_channels: int,
         duration: float,
         gauge: wx.Gauge | None,
+        settings: dict,
     ) -> bool:
+
+        if not settings.get("global", True):
+            chk_skip_audio = settings.get("skip_audio", False)
+            chk_skip_video = settings.get("skip_video", False)
+            encode_mode = settings.get("encode_mode", 0)
+            qp_slider = settings.get("qp_slider", 22)
+            chk_limit_res = settings.get("limit_res", False)
+            tonemap_mode = settings.get("tonemapping", 0)
+        else:
+            global_settings = self.get_current_settings()
+            chk_skip_audio = global_settings.get("skip_audio", False)
+            chk_skip_video = global_settings.get("skip_video", False)
+            encode_mode = global_settings.get("encode_mode", 0)
+            qp_slider = global_settings.get("qp_slider", 22)
+            chk_limit_res = global_settings.get("limit_res", False)
+            tonemap_mode = global_settings.get("tonemapping", 0)
+
         # audio
-        if self.chk_skip_audio.GetValue():
+        if chk_skip_audio:
             audio_codec_args = ["-c:a", "copy"]
             wx.CallAfter(self.log.AppendText, "🎵 Аудио: copy\n")
         else:
@@ -963,12 +1015,11 @@ class VideoConverter(wx.Frame):
             wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
 
         # video
-        if not self.chk_skip_video.GetValue():
+        if not chk_skip_video:
             hdr = get_hdr_info(input_path)
             hdr_type = hdr["type"]
             auto_tonemap = bool(hdr["requires_tonemap"])
 
-            tonemap_mode = self.choice_tonemap.GetSelection()  # 0 авто, 1 вкл, 2 выкл
             if tonemap_mode == 2:
                 needs_tonemap = False
             elif tonemap_mode == 1:
@@ -979,7 +1030,7 @@ class VideoConverter(wx.Frame):
             wx.CallAfter(self.log.AppendText, f"🎨 Видео: {hdr_type}, tonemap={'on' if needs_tonemap else 'off'}\n")
 
             scale_filter = ""
-            if self.chk_limit_res.GetValue():
+            if chk_limit_res:
                 vinfo = get_video_info(input_path)
                 try:
                     w = int(vinfo.get("width") or 0)
@@ -999,12 +1050,11 @@ class VideoConverter(wx.Frame):
             else:
                 vf_filter = f"format=yuv420p{scale_filter}"
 
-            mode = self.encode_mode.GetSelection()
-            if mode == 0:
-                video_codec_args = ["-rc", "vbr", "-cq", str(self.qp_value), "-b:v", "0", "-qmin", "0"]
-                wx.CallAfter(self.log.AppendText, f"🎯 Режим: QP={self.qp_value}\n")
+            if encode_mode == 0:
+                video_codec_args = ["-rc", "vbr", "-cq", str(qp_slider), "-b:v", "0", "-qmin", "0"]
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: QP={qp_slider}\n")
             else:
-                target_bitrate = f"{int(self.qp_slider.GetValue() * 1000)}k"
+                target_bitrate = f"{int(qp_slider * 1000)}k"
                 video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
                 wx.CallAfter(self.log.AppendText, f"📦 Режим: CBR={target_bitrate}\n")
 
@@ -1218,6 +1268,76 @@ class VideoConverter(wx.Frame):
                 self.save_folder_txt.SetValue(path)
                 self.save_folder = path
                 save_reg("save_path", path)
+
+    def get_current_settings(self):
+        return {
+            "global": False,
+            "encode_mode": self.encode_mode.GetSelection(),
+            "qp_slider": self.qp_slider.GetValue(),
+            "limit_res": self.chk_limit_res.GetValue(),
+            "tonemapping": self.choice_tonemap.GetSelection(),
+            "skip_video": self.chk_skip_video.GetValue(),
+            "skip_audio": self.chk_skip_audio.GetValue(),
+        }
+
+    def reset_global_settings(self):
+        self.encode_mode.SetSelection(self.global_settings.get("encode_mode", 0))
+        self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
+        self.chk_limit_res.SetValue(self.global_settings.get("limit_res", False))
+        self.choice_tonemap.SetSelection(self.global_settings.get("tonemapping", 0))
+        self.chk_skip_video.SetValue(self.global_settings.get("skip_video", False))
+        self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
+
+    def set_settings_to_selected_rows(self):
+        item_index = self.list.GetFirstSelected()
+        while item_index != -1:
+            item_text = self.list.GetItemText(item_index)
+            print(f"Выбрана строка {item_index}: {item_text}")
+
+            item_index = self.list.GetNextSelected(item_index)
+
+    def get_row_settings_string(self, row: int, settings: dict):
+        if settings.get("skip_video", False):
+            video_str = "В: не конв."
+        else:
+            if settings.get("encode_mode", 0) == 0:
+                video_str = f"QP={settings.get('qp_slider', 22)}"
+            else:
+                video_str = f"CBR={settings.get('qp_slider', 8)}"
+            if settings.get("limit_res", False):
+                video_str += ", fullHD"
+            tm_string = settings.get("tonemapping", 0)
+            if tm_string == 2:
+                video_str += ", TM=выкл"
+            elif tm_string == 1:
+                video_str += ", TM=вкл"
+            elif tm_string == 0:
+                video_str += ", TM=auto"
+
+        if settings.get("skip_audio", False):
+            audio_str = ", А: не конв."
+        else:
+            audio_str = ""
+        return f"{video_str}{audio_str}"
+
+    def save_settings_to_sel_rows_and_update_list(self):
+        item_index = self.list.GetFirstSelected()
+        while item_index != -1:
+            settings = self.get_current_settings()
+            self.row_widgets[item_index]["settings"] = settings
+            self.list.SetStringItem(item_index, self.COL_SETTINGS, self.get_row_settings_string(item_index, settings))
+            self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 251, 235))
+            self.list.Refresh()
+            item_index = self.list.GetNextSelected(item_index)
+
+    def on_limit_res(self, event):
+        self.save_settings_to_sel_rows_and_update_list()
+
+    def on_tonemapping(self, event):
+        self.save_settings_to_sel_rows_and_update_list()
+
+    def on_skip_audio(self, event):
+        self.save_settings_to_sel_rows_and_update_list()
 
 
 if __name__ == "__main__":
