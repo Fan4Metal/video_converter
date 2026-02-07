@@ -483,6 +483,7 @@ class VideoConverter(wx.Frame):
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_select)
+        self.list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.on_right_click)
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
@@ -826,6 +827,77 @@ class VideoConverter(wx.Frame):
                     "--no-sub",
                 ],
             )
+
+    def on_right_click(self, event):
+        """Контекстное меню по правому клику"""
+        # Получаем индекс строки из события
+        item = event.GetIndex()
+        
+        # Показываем меню только если клик был на строке
+        if item == wx.NOT_FOUND or item == -1:
+            return
+        
+        # Выделяем строку, если она не выделена
+        if not self.list.IsSelected(item):
+            self.list.Select(item)
+
+        # Создаем контекстное меню
+        menu = wx.Menu()
+
+        # Пункты меню
+        play_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести")
+        menu.AppendSeparator()
+
+        open_folder_item = menu.Append(wx.ID_ANY, "📁 Открыть папку с файлом")
+        open_output_folder_item = menu.Append(wx.ID_ANY, "📂 Открыть папку вывода")
+        menu.AppendSeparator()
+
+        remove_item = menu.Append(wx.ID_ANY, "🗑 Удалить из списка")
+        clear_item = menu.Append(wx.ID_ANY, "🧹 Очистить весь список")
+
+        # Отключаем пункты, если идет конвертация
+        if self.converting:
+            remove_item.Enable(False)
+            clear_item.Enable(False)
+
+        # Привязываем обработчики
+        self.Bind(wx.EVT_MENU, lambda e: self.on_play_file(e), play_item)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_context_open_folder(e), open_folder_item)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_context_open_output_folder(e), open_output_folder_item)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_remove_selected(e), remove_item)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_clear(e), clear_item)
+
+        # Показываем меню в позиции курсора
+        self.list.PopupMenu(menu)
+        menu.Destroy()
+
+    def on_context_open_folder(self, event):
+        """Открыть папку с исходным файлом"""
+        row = self.list.GetFirstSelected()
+        if row == -1:
+            return
+
+        widgets = self.row_widgets.get(row)
+        if not widgets:
+            return
+
+        path = widgets.get("path")
+        if path and os.path.isfile(path):
+            folder = os.path.dirname(path)
+            if sys.platform.startswith("win"):
+                subprocess.Popen(f'explorer /select,"{path}"')
+            else:
+                subprocess.Popen(["xdg-open", folder])
+
+    def on_context_open_output_folder(self, event):
+        """Открыть папку вывода"""
+        if self.save_folder and os.path.isdir(self.save_folder):
+            if sys.platform.startswith("win"):
+                subprocess.Popen(f'explorer "{self.save_folder}"')
+            else:
+                subprocess.Popen(["xdg-open", self.save_folder])
+        else:
+            wx.MessageBox("Папка вывода не выбрана", "Информация", wx.OK | wx.ICON_INFORMATION)
 
     # --- Rows ---
     def add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
