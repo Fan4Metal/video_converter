@@ -484,6 +484,7 @@ class VideoConverter(wx.Frame):
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_select)
         self.list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.on_right_click)
+        self.list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.on_item_deselect)
 
         vbox.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, self.FromDIP(5))
 
@@ -755,6 +756,21 @@ class VideoConverter(wx.Frame):
             self.qp_label.SetLabel(f"Битрейт = {val:.1f} Мбит/с")
 
         self.save_settings_to_sel_rows_and_update_list()
+
+    def on_mode_and_qp_reset(self):
+        mode = self.encode_mode.GetSelection()
+        if mode == 0:
+            self.slider_label.SetLabel("Качество, QP:")
+            self.qp_slider.SetRange(14, 30)
+            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
+            self.qp_label.SetLabel(f"QP = {self.global_settings.get('qp_slider', 22)}")
+            self.qp_value = self.global_settings.get("qp_slider", 22)
+        else:
+            self.slider_label.SetLabel("Битрейт (Мбит/с):")
+            self.qp_slider.SetRange(2, 25)
+            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 8))
+            self.qp_label.SetLabel(f"Битрейт = {self.global_settings.get('qp_slider', 8)}")
+            self.bitrate_value = self.global_settings.get("qp_slider", 8)
 
     def on_toggle_log(self, event):
         if self.log_visible:
@@ -1040,14 +1056,7 @@ class VideoConverter(wx.Frame):
             wx.CallAfter(self.enable_interface)
 
     def on_item_select(self, event):
-        item_index = self.list.GetFirstSelected()
-
-        while item_index != -1:
-            # Обрабатываем выбранный элемент
-            item_text = self.list.GetItemText(item_index)
-            print(f"Выбрана строка {item_index}: {item_text}")
-
-            item_index = self.list.GetNextSelected(item_index)
+        self.global_settings = self.get_current_settings()
 
     # --- FFmpeg ---
     def run_ffmpeg_with_progress(
@@ -1353,12 +1362,16 @@ class VideoConverter(wx.Frame):
         }
 
     def reset_global_settings(self):
-        self.encode_mode.SetSelection(self.global_settings.get("encode_mode", 0))
-        self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
-        self.chk_limit_res.SetValue(self.global_settings.get("limit_res", False))
-        self.choice_tonemap.SetSelection(self.global_settings.get("tonemapping", 0))
-        self.chk_skip_video.SetValue(self.global_settings.get("skip_video", False))
-        self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
+        if self.global_settings:
+            self.encode_mode.SetSelection(self.global_settings.get("encode_mode", 0))
+            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
+            self.on_mode_and_qp_reset()
+            self.chk_limit_res.SetValue(self.global_settings.get("limit_res", False))
+            self.choice_tonemap.SetSelection(self.global_settings.get("tonemapping", 0))
+            self.chk_skip_video.SetValue(self.global_settings.get("skip_video", False))
+            if self.global_settings.get("skip_video", False):
+                self.on_skip_video()
+            self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
 
     def set_settings_to_selected_rows(self):
         item_index = self.list.GetFirstSelected()
@@ -1411,6 +1424,8 @@ class VideoConverter(wx.Frame):
     def on_skip_audio(self, event):
         self.save_settings_to_sel_rows_and_update_list()
 
+    def on_item_deselect(self, event):
+        self.reset_global_settings()
 
 if __name__ == "__main__":
     app = wx.App(False)
