@@ -59,10 +59,10 @@ def get_reg(name):
     except WindowsError:
         return
 
+
 def read_from_txt(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
-
 
 
 def format_time(seconds: float) -> str:
@@ -416,7 +416,7 @@ class VideoConverter(wx.Frame):
     def __init__(self):
         super().__init__(
             None,
-            title=f"Video Converter (NVENC + AAC) {__VERSION__}",
+            title=f"Video Converter {__VERSION__}",
             style=(wx.DEFAULT_FRAME_STYLE | wx.WANTS_CHARS),
         )
         self.Bind(wx.EVT_CLOSE, self.on_close)
@@ -454,15 +454,30 @@ class VideoConverter(wx.Frame):
         self.btn_clear.Bind(wx.EVT_BUTTON, self.on_clear)
 
         self.save_folder_label = wx.StaticText(panel, label="Сохранять в: ", size=self.FromDIP(wx.Size(-1, 28)))
-        self.save_folder_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
+        self.save_folder_txt = wx.TextCtrl(panel, style=wx.TE_READONLY, size=self.FromDIP(wx.Size(120, -1)))
         self.btn_save_folder_browse = wx.Button(panel, label="Выбрать папку...")
         self.btn_save_folder_browse.Bind(wx.EVT_BUTTON, self.browse_save_folder)
+
+        basket_icon = wx.ArtProvider.GetBitmap(wx.ART_DELETE, size=wx.Size(16, 16))
+        self.btn_clear_save_folder = wx.BitmapButton(panel, bitmap=basket_icon, size=self.FromDIP(wx.Size(22, 22)))
+        self.btn_clear_save_folder.SetToolTip(
+            "Очистить путь к папке для сохранения.\nСконвертированные файлы будут сохранены в папке с исходными файлами."
+        )
+        self.btn_clear_save_folder.Bind(wx.EVT_BUTTON, self.on_clear_save_folder)
+
         question_bmp = wx.ArtProvider.GetBitmap(wx.ART_HELP, size=wx.Size(16, 16))
         self.btn_info_page = wx.BitmapButton(panel, bitmap=question_bmp, size=self.FromDIP(wx.Size(22, 22)))
         self.btn_info_page.SetToolTip("Справка")
         self.btn_info_page.Bind(wx.EVT_BUTTON, self.on_info_page)
 
         top.Add(self.btn_add, 0, wx.ALL, self.FromDIP(8))
+        top.Add(self.btn_remove, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
+        top.Add(self.btn_clear, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
+        top.AddStretchSpacer(1)
+        top.Add(self.save_folder_label, 0, wx.RIGHT | wx.TOP | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
+        top.Add(self.save_folder_txt, 1, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
+        top.Add(self.btn_save_folder_browse, 0, wx.TOP | wx.BOTTOM, self.FromDIP(8))
+        top.Add(self.btn_clear_save_folder, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
         top.Add(self.btn_info_page, 0, wx.ALL, self.FromDIP(8))
 
         vbox.Add(top, 0, wx.EXPAND)
@@ -482,7 +497,7 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
         self.list.InsertColumn(self.COL_SETTINGS, "Параметры", width=self.FromDIP(170))
-        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(140))
+        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
 
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
@@ -600,8 +615,8 @@ class VideoConverter(wx.Frame):
 
         panel.SetSizer(vbox)
 
-        self.size_no_log = self.FromDIP(wx.Size(1590, 670))
-        self.size_log = self.FromDIP(wx.Size(1590, 875))  # +205
+        self.size_no_log = self.FromDIP(wx.Size(1535, 670))
+        self.size_log = self.FromDIP(wx.Size(1535, 875))  # +205
         self.SetSize(self.size_no_log)
         self.SetMinSize(self.size_no_log)
         icon_path = get_resource_path("images/favicon.png")
@@ -853,11 +868,11 @@ class VideoConverter(wx.Frame):
         """Контекстное меню по правому клику"""
         # Получаем индекс строки из события
         item = event.GetIndex()
-        
+
         # Показываем меню только если клик был на строке
         if item == wx.NOT_FOUND or item == -1:
             return
-        
+
         # Выделяем строку, если она не выделена
         if not self.list.IsSelected(item):
             self.list.Select(item)
@@ -1432,6 +1447,10 @@ class VideoConverter(wx.Frame):
     def on_item_deselect(self, event):
         self.reset_global_settings()
 
+    def on_clear_save_folder(self, event):
+        self.save_folder_txt.SetValue("")
+        save_reg("save_path", "")
+
     def on_info_page(self, event):
         description = """Конвертер видеофалов. Является оберткой над FFmpeg. Кодек видео - NVENC, кодек аудио - AAC."""
         info = wx.adv.AboutDialogInfo()
@@ -1445,7 +1464,9 @@ class VideoConverter(wx.Frame):
         info.AddDeveloper("предложения и тестирование: Колесников Дмитрий")
         info.SetWebSite("https://github.com/Fan4Metal/video_converter", "Github")
         wx.adv.AboutBox(info)
+
+
 if __name__ == "__main__":
-    app = wx.App(False)
+    app = wx.App()
     top = VideoConverter()
     app.MainLoop()
