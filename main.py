@@ -864,8 +864,8 @@ class VideoConverter(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self.on_play_file(e), play_item)
         self.Bind(wx.EVT_MENU, lambda e: self.on_context_open_folder(e), open_folder_item)
         self.Bind(wx.EVT_MENU, lambda e: self.on_context_open_output_folder(e), open_output_folder_item)
-        self.Bind(wx.EVT_MENU, lambda e: self.on_remove_selected(e), remove_item)
-        self.Bind(wx.EVT_MENU, lambda e: self.on_clear(e), clear_item)
+        self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.on_remove_selected, e), remove_item)
+        self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.on_clear, e), clear_item)
 
         # Показываем меню в позиции курсора
         self.list.PopupMenu(menu)
