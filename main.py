@@ -9,6 +9,7 @@ import time
 import winreg
 
 import wx
+import wx.adv
 from wx.lib.agw import ultimatelistctrl as ULC
 
 # --- HiDPI (Windows only) ---
@@ -57,6 +58,11 @@ def get_reg(name):
         return value
     except WindowsError:
         return
+
+def read_from_txt(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
 
 
 def format_time(seconds: float) -> str:
@@ -451,14 +457,13 @@ class VideoConverter(wx.Frame):
         self.save_folder_txt = wx.TextCtrl(panel, style=wx.TE_READONLY)
         self.btn_save_folder_browse = wx.Button(panel, label="Выбрать папку...")
         self.btn_save_folder_browse.Bind(wx.EVT_BUTTON, self.browse_save_folder)
+        question_bmp = wx.ArtProvider.GetBitmap(wx.ART_HELP, size=wx.Size(16, 16))
+        self.btn_info_page = wx.BitmapButton(panel, bitmap=question_bmp, size=self.FromDIP(wx.Size(22, 22)))
+        self.btn_info_page.SetToolTip("Справка")
+        self.btn_info_page.Bind(wx.EVT_BUTTON, self.on_info_page)
 
         top.Add(self.btn_add, 0, wx.ALL, self.FromDIP(8))
-        top.Add(self.btn_remove, 0, wx.ALL, self.FromDIP(8))
-        top.Add(self.btn_clear, 0, wx.ALL, self.FromDIP(8))
-        # top.AddStretchSpacer(1)
-        top.Add(self.save_folder_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
-        top.Add(self.save_folder_txt, 1, wx.ALL, self.FromDIP(8))
-        top.Add(self.btn_save_folder_browse, 0, wx.ALL, self.FromDIP(8))
+        top.Add(self.btn_info_page, 0, wx.ALL, self.FromDIP(8))
 
         vbox.Add(top, 0, wx.EXPAND)
 
@@ -1427,6 +1432,19 @@ class VideoConverter(wx.Frame):
     def on_item_deselect(self, event):
         self.reset_global_settings()
 
+    def on_info_page(self, event):
+        description = """Конвертер видеофалов. Является оберткой над FFmpeg. Кодек видео - NVENC, кодек аудио - AAC."""
+        info = wx.adv.AboutDialogInfo()
+        info.SetName("Video Converter")
+        info.SetVersion(__VERSION__)
+        info.SetDescription(description)
+        info.SetCopyright("(C) 2025-2026 Ванюнин Александр")
+        info.SetLicence(read_from_txt("LICENSE"))
+        info.SetIcon(wx.Icon(get_resource_path("images/favicon.ico"), wx.BITMAP_TYPE_ICO))
+        info.AddDeveloper("Код: Александр Ванюнин")
+        info.AddDeveloper("предложения и тестирование: Колесников Дмитрий")
+        info.SetWebSite("https://github.com/Fan4Metal/video_converter", "Github")
+        wx.adv.AboutBox(info)
 if __name__ == "__main__":
     app = wx.App(False)
     top = VideoConverter()
