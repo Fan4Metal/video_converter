@@ -856,19 +856,6 @@ class VideoConverter(wx.Frame):
         if row == -1:
             return
         widgets = self.row_widgets.get(row)
-        if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
-            output_file = widgets.get("output_file")
-            if os.path.isfile(output_file):
-                subprocess.Popen(
-                    [
-                        MPV_PATH,
-                        output_file,
-                        "--title=Сконвертированный файл: ${filename}",
-                        "--no-sub",
-                    ],
-                )
-                return
-
         path = widgets.get("path")
         if os.path.isfile(path):
             audio_stream_num = widgets.get("choice").GetSelection() + 1
@@ -904,6 +891,12 @@ class VideoConverter(wx.Frame):
 
         # Пункты меню
         play_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести")
+        play_converted_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести сконвертированный файл")
+        widgets = self.row_widgets.get(item)
+        if self.list.GetItem(item, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
+            play_converted_item.Enable()
+        else:
+            play_converted_item.Enable(False)
         menu.AppendSeparator()
 
         open_folder_item = menu.Append(wx.ID_ANY, "📁 Открыть папку с файлом")
@@ -924,6 +917,7 @@ class VideoConverter(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self.on_context_open_output_folder(e), open_output_folder_item)
         self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.on_remove_selected, e), remove_item)
         self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.on_clear, e), clear_item)
+        self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.on_context_play_converted, e), play_converted_item)
 
         # Показываем меню в позиции курсора
         self.list.PopupMenu(menu)
@@ -956,6 +950,24 @@ class VideoConverter(wx.Frame):
                 subprocess.Popen(["xdg-open", self.save_folder])
         else:
             wx.MessageBox("Папка вывода не выбрана", "Информация", wx.OK | wx.ICON_INFORMATION)
+
+    def on_context_play_converted(self, event):
+        row = self.list.GetFirstSelected()
+        if row == -1:
+            return
+        widgets = self.row_widgets.get(row)
+        if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
+            output_file = widgets.get("output_file")
+            if os.path.isfile(output_file):
+                subprocess.Popen(
+                    [
+                        MPV_PATH,
+                        output_file,
+                        "--title=Сконвертированный файл: ${filename}",
+                        "--no-sub",
+                    ],
+                )
+                return
 
     # --- Rows ---
     def add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
