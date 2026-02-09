@@ -2,6 +2,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import shutil
 
 
 def run_command(command, shell=False):
@@ -63,13 +64,20 @@ def main():
             "--onedir",
             "--icon=.\\images\\favicon.ico",
             "--add-data=images\\favicon.png;.\\images",
+            "--add-data=images\\favicon.ico;.\\images",
             "--add-data=ffprobe.exe;.",
             "--add-data=ffmpeg.exe;.",
             "--add-data=mpv.exe;.",
+            "--add-data=LICENSE;.",
             "--name=VC",
             "main.py",
         ]
         run_command(pyinstaller_cmd)
+
+        try:
+            shutil.copytree(R".venv\Lib\site-packages\wx\locale\ru", R"dist\VC\_internal\wx\locale\ru")
+        except Exception as e:
+            print(f"Ошибка копирования локализации wx: {e}")
 
         # Шаг 3: Обновляем версию в setup.iss
         print("\n=== Обновление версии в Inno Setup ===")
