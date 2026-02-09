@@ -397,12 +397,12 @@ def unique_output_path(save_folder: str, input_path: str) -> str:
     else:
         base = os.path.splitext(os.path.basename(input_path))[0]
         ext = ".mp4"
-        out = os.path.join(save_folder, base + "_conv" + ext)
+        out = os.path.join(save_folder, f"{base}_conv{ext}")
         if not os.path.exists(out):
             return out
         n = 2
         while True:
-            candidate = os.path.join(save_folder, f"{base}_{n}{ext}")
+            candidate = os.path.join(save_folder, f"{base}_conv_{n}{ext}")
             if not os.path.exists(candidate):
                 return candidate
             n += 1
@@ -563,7 +563,7 @@ class VideoConverter(wx.Frame):
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
         vbox_quality.Add(self.slider_label, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
-        vbox_quality.Add(self.qp_slider, 1, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(10))
+        vbox_quality.Add(self.qp_slider, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(10))
         vbox_quality.Add(self.qp_label, 0, wx.ALIGN_CENTER_VERTICAL)
 
         # растягиваем правую часть
@@ -1424,7 +1424,7 @@ class VideoConverter(wx.Frame):
             self.choice_tonemap.SetSelection(self.global_settings.get("tonemapping", 0))
             self.chk_skip_video.SetValue(self.global_settings.get("skip_video", False))
             if self.global_settings.get("skip_video", False):
-                self.on_skip_video()
+                self.on_skip_video(None)
             self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
 
     def set_settings_to_selected_rows(self):
@@ -1491,6 +1491,7 @@ class VideoConverter(wx.Frame):
 
 Доступны следующие форматы входных файлов: MKV, MP4, MOV, AVI.
 Выходной формат: MP4.
+Видеокодек: NVENC (H.264), аудиокодек: AAC.
 Настройки качества: режим постоянного качества (QP) или режим постоянного битрейта (CBR).
 Работает только на компьютерах с видеокартой NVIDIA с поддержкой NVENC."""
         info = wx.adv.AboutDialogInfo()
