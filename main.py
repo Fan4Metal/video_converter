@@ -23,7 +23,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.2"
+__VERSION__ = "0.2.3"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -671,12 +671,13 @@ class VideoConverter(wx.Frame):
 
         self.Show()
 
-        self.add_files(
-            [
-                R"D:\Films\testing\test1.mkv",
-                R"D:\Films\testing\test2.mkv",
-            ]
-        )
+        # self.add_files(
+        #     [
+        #         R"D:\Films\testing\test1.mkv",
+        #         # R"D:\Films\testing\test2.mkv",
+        #         # R"D:\Films\testing\test3.mkv",
+        #     ]
+        # )
 
     # --- UI actions ---
     def browse_files(self, event):
