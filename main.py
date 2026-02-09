@@ -36,6 +36,25 @@ FFPROBE_PATH = get_resource_path("ffprobe.exe")
 MPV_PATH = get_resource_path("mpv.exe")
 
 
+def get_ffmpeg_version(ffmpeg_path: str) -> dict:
+    try:
+        result = subprocess.run([ffmpeg_path, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        output = result.stdout
+
+        if not output:
+            output = result.stderr
+
+        ffmpeg_version_match = re.search(r"ffmpeg version ([\w.-]+)", output)
+        ffmpeg_version = ffmpeg_version_match.group(1) if ffmpeg_version_match else "Unknown"
+
+        libavcodec_match = re.search(r"libavcodec\s+(\d+\.\s*\d+\.\s*\d+)", output)
+        libavcodec_version = libavcodec_match.group(1).replace(" ", "") if libavcodec_match else "Unknown"
+
+        return {"ffmpeg": ffmpeg_version, "libavcodec": libavcodec_version}
+    except FileNotFoundError:
+        return "FFmpeg не установлен"
+
+
 def save_reg(name: str, data: str):
     """
     Сохраняет в реестре параметры приложения.
@@ -634,6 +653,9 @@ class VideoConverter(wx.Frame):
         if not os.path.isfile(FFPROBE_PATH):
             self.log.AppendText("❌ Не найден ffprobe.exe\n")
             self.btn_start.Disable()
+        ffmpeg_ver = get_ffmpeg_version(FFMPEG_PATH)
+        if ffmpeg_ver != "FFmpeg не установлен":
+            self.log.AppendText(f"✅ FFmpeg {ffmpeg_ver['ffmpeg']}, Libavcodec {ffmpeg_ver['libavcodec']}\n")
 
         # загрузка папки для сохранения
         _save_path = get_reg("save_path")
