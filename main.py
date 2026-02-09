@@ -42,7 +42,9 @@ MPV_PATH = get_resource_path("mpv.exe")
 
 def get_ffmpeg_version(ffmpeg_path: str) -> dict:
     try:
-        result = subprocess.run([ffmpeg_path, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(
+            [ffmpeg_path, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW
+        )
         output = result.stdout
 
         if not output:
@@ -944,21 +946,17 @@ class VideoConverter(wx.Frame):
 
         path = widgets.get("path")
         if path and os.path.isfile(path):
-            folder = os.path.dirname(path)
-            if sys.platform.startswith("win"):
-                subprocess.Popen(f'explorer /select,"{path}"')
-            else:
-                subprocess.Popen(["xdg-open", folder])
+            subprocess.Popen(f'explorer /select,"{path}"')
 
     def on_context_open_output_folder(self, event):
         """Открыть папку вывода"""
-        if self.save_folder and os.path.isdir(self.save_folder):
-            if sys.platform.startswith("win"):
-                subprocess.Popen(f'explorer "{self.save_folder}"')
-            else:
-                subprocess.Popen(["xdg-open", self.save_folder])
-        else:
-            wx.MessageBox("Папка вывода не выбрана", "Информация", wx.OK | wx.ICON_INFORMATION)
+        row = self.list.GetFirstSelected()
+        if row == -1:
+            return
+        widgets = self.row_widgets.get(row)
+        path = widgets.get("output_file", "")
+        if path and os.path.isfile(path):
+            subprocess.Popen(f'explorer /select,"{path}"')
 
     def on_context_play_converted(self, event):
         row = self.list.GetFirstSelected()
