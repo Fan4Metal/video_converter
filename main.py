@@ -899,6 +899,11 @@ class VideoConverter(wx.Frame):
             play_converted_item.Enable(False)
         menu.AppendSeparator()
 
+        if not widgets.get("settings", "").get("global", False):
+            reset_convert_settings_item = menu.Append(wx.ID_ANY, "🔄 Сбросить настройки конвертации")
+            menu.AppendSeparator()
+            self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.reset_convert_settings, e), reset_convert_settings_item)
+
         open_folder_item = menu.Append(wx.ID_ANY, "📁 Открыть папку с файлом")
         open_output_folder_item = menu.Append(wx.ID_ANY, "📂 Открыть папку вывода")
         menu.AppendSeparator()
@@ -1484,6 +1489,23 @@ class VideoConverter(wx.Frame):
     def on_clear_save_folder(self, event):
         self.save_folder_txt.SetValue("")
         save_reg("save_path", "")
+
+    def reset_convert_settings(self, event):
+        item_index = self.list.GetFirstSelected()
+        if item_index == -1:
+            return
+        self.row_widgets[item_index]["settings"] = {
+            "global": True,
+            "encode_mode": "",
+            "qp_slider": "",
+            "limit_res": "",
+            "tonemapping": "",
+            "skip_video": "",
+            "skip_audio": "",
+        }
+        self.list.SetStringItem(item_index, self.COL_SETTINGS, "⚙️Глобальные")
+        self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 255, 255))
+        self.list.Refresh()
 
     def on_info_page(self, event):
         description = """\
