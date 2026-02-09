@@ -7,10 +7,14 @@ import sys
 import threading
 import time
 import winreg
+import locale
+import gettext
+
 
 import wx
-import wx.adv
+from wx.adv import AboutDialogInfo
 from wx.lib.agw import ultimatelistctrl as ULC
+
 
 # --- HiDPI (Windows only) ---
 if sys.platform.startswith("win"):
@@ -1516,15 +1520,17 @@ class VideoConverter(wx.Frame):
 Видеокодек: NVENC (H.264), аудиокодек: AAC.
 Настройки качества: режим постоянного качества (QP) или режим постоянного битрейта (CBR).
 Работает только на компьютерах с видеокартой NVIDIA с поддержкой NVENC."""
-        info = wx.adv.AboutDialogInfo()
+        wx.Locale.AddCatalogLookupPathPrefix(".")
+        rus_locale = wx.Locale(wx.LANGUAGE_RUSSIAN)
+        info = AboutDialogInfo()
         info.SetName("Video Converter")
         info.SetVersion(__VERSION__)
         info.SetDescription(description)
         info.SetCopyright("(C) 2025-2026 Ванюнин Александр")
-        info.SetLicence(read_from_txt("LICENSE"))
+        info.SetLicence(read_from_txt(get_resource_path("LICENSE")))
         info.SetIcon(wx.Icon(get_resource_path("images/favicon.ico"), wx.BITMAP_TYPE_ICO))
-        info.AddDeveloper("Код: Александр Ванюнин")
-        info.AddDeveloper("идеи и тестирование: Дмитрий Колесников")
+        info.AddDeveloper("Код: Ванюнин Александр")
+        info.AddDeveloper("идеи и тестирование: Колесников Дмитрий")
         info.SetWebSite("https://github.com/Fan4Metal/video_converter", "Github")
         wx.adv.AboutBox(info)
 
