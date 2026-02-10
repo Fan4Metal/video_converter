@@ -7,8 +7,6 @@ import sys
 import threading
 import time
 import winreg
-import locale
-import gettext
 
 
 import wx
