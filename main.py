@@ -21,7 +21,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.3"
+__VERSION__ = "0.2.4"
 
 
 def get_resource_path(relative_path: str) -> str:
