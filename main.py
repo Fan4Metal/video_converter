@@ -1302,10 +1302,16 @@ class VideoConverter(wx.Frame):
 
             sm = speed_regex.search(line)
             if sm:
-                current_speed = sm.group(1) + "x"
+                current_speed = sm.group(1)
             fm = fps_regex.search(line)
             if fm:
                 current_fps = fm.group(1)
+
+            seconds_to_convert = self.all_jobs_duration - overall
+            try:
+                remaining_time = format_time(seconds_to_convert / float(current_speed))
+            except Exception:
+                remaining_time = "?"
 
             wx.CallAfter(self.progress.SetValue, overall_progress)
             if gauge:
@@ -1313,7 +1319,7 @@ class VideoConverter(wx.Frame):
 
             wx.CallAfter(
                 self.progress_label.SetLabel,
-                f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed} │ 🎞️ {current_fps} fps",
+                f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed}x │ 🎞️ {current_fps} fps | ⏲ {remaining_time}",
             )
 
         # cancel
