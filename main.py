@@ -10,6 +10,7 @@ import winreg
 
 
 import wx
+from mutagen.mp4 import MP4, MP4StreamInfoError
 from wx.adv import AboutDialogInfo
 from wx.lib.agw import ultimatelistctrl as ULC
 
@@ -81,6 +82,20 @@ def get_reg(name):
         return value
     except WindowsError:
         return
+
+
+def copy_mp4_tags(source_path: str, dest_path: str):
+    try:
+        video = MP4(source_path)
+        new_video = MP4(dest_path)
+        for tag in video.tags:
+            new_video.tags[tag] = video.tags[tag]
+        new_video.save()
+        return True
+    except MP4StreamInfoError as e:
+        print(e)
+    except Exception as e:
+        print(e)
 
 
 def read_from_txt(path: str) -> str:
@@ -604,6 +619,13 @@ class VideoConverter(wx.Frame):
         self.chk_skip_audio.Bind(wx.EVT_CHECKBOX, self.on_skip_audio)
         options_box.Add(self.chk_skip_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
+        self.chk_copy_tags = wx.CheckBox(panel, label="копировать теги")
+        self.chk_copy_tags.SetToolTip(
+            wx.ToolTip("Скопировать теги из исходного файла mp4 в cконвертированный файл. Это глобальная настройка.")
+        )
+        self.chk_copy_tags.SetValue(False)
+        options_box.Add(self.chk_copy_tags, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -1090,6 +1112,9 @@ class VideoConverter(wx.Frame):
 
                 if ok and not self.cancel_event.is_set():
                     widgets.update({"output_file": output_file})
+                    if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() == ".mp4":
+                        if copy_mp4_tags(path, output_file):
+                            wx.CallAfter(self.log.AppendText, f"📌 Теги скопированы\n")
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
                     wx.CallAfter(self.log.AppendText, f"\n ✅ Конвертация завершена\n")
