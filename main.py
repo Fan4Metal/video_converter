@@ -646,7 +646,7 @@ class VideoConverter(wx.Frame):
         vbox.Add(btn_box, 0, wx.EXPAND)
 
         # прогрессбар
-        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL)
+        self.progress = wx.Gauge(panel, range=100, size=self.FromDIP(wx.Size(-1, 25)), style=wx.GA_HORIZONTAL | wx.GA_PROGRESS)
         vbox.Add(self.progress, 0, wx.EXPAND | wx.ALL, self.FromDIP(5))
 
         # прогресс и статус
