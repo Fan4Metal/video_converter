@@ -69,6 +69,7 @@ def main():
             "--add-data=ffmpeg.exe;.",
             "--add-data=mpv.exe;.",
             "--add-data=LICENSE;.",
+            "--add-data=sound.wav;.",
             "--name=VC",
             "main.py",
         ]

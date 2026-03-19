@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import winreg
-
+import winsound
 
 import wx
 from mutagen.mp4 import MP4, MP4StreamInfoError
@@ -1132,6 +1132,7 @@ class VideoConverter(wx.Frame):
             else:
                 wx.CallAfter(self.progress.SetValue, 100)
                 wx.CallAfter(self.progress_label.SetLabel, "✅ Очередь завершена")
+                winsound.PlaySound(get_resource_path("sound.wav"), winsound.SND_FILENAME | winsound.SND_ASYNC)
 
         finally:
             self.converting = False
