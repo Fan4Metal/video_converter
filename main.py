@@ -22,7 +22,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.5"
+__VERSION__ = "0.2.6"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -400,31 +400,34 @@ def get_video_info(filepath: str) -> dict:
     return info
 
 
-def unique_output_path(save_folder: str, input_path: str) -> str:
-    if not save_folder or not os.path.isdir(save_folder):
-        base = os.path.splitext(input_path)[0] + "_conv"
-        ext = ".mp4"
-        out = base + ext
-        if not os.path.exists(out):
-            return out
-        n = 2
-        while True:
-            candidate = f"{base}_{n}{ext}"
-            if not os.path.exists(candidate):
-                return candidate
-            n += 1
-    else:
-        base = os.path.splitext(os.path.basename(input_path))[0]
-        ext = ".mp4"
-        out = os.path.join(save_folder, f"{base}_conv{ext}")
-        if not os.path.exists(out):
-            return out
-        n = 2
-        while True:
-            candidate = os.path.join(save_folder, f"{base}_conv_{n}{ext}")
-            if not os.path.exists(candidate):
-                return candidate
-            n += 1
+def unique_output_path(save_folder: str, input_path: str, add_conv_suffix: bool = True, output_ext: str = ".mp4") -> str:
+    """
+    Возвращает уникальный путь для выходного файла.
+
+    :param save_folder: Папка для сохранения. Если не существует или пустая,
+                        файл создаётся рядом с input_path.
+    :param input_path: Путь к исходному файлу.
+    :param add_conv_suffix: Добавлять ли суффикс "_conv" к имени файла.
+    :param output_ext: Расширение выходного файла, по умолчанию ".mp4".
+    :return: Уникальный путь к выходному файлу.
+    """
+    input_dir = os.path.dirname(input_path)
+    input_name = os.path.splitext(os.path.basename(input_path))[0]
+
+    target_dir = save_folder if save_folder and os.path.isdir(save_folder) else input_dir
+
+    base_name = f"{input_name}_conv" if add_conv_suffix else input_name
+    out_path = os.path.join(target_dir, f"{base_name}{output_ext}")
+
+    if not os.path.exists(out_path):
+        return out_path
+
+    n = 2
+    while True:
+        candidate = os.path.join(target_dir, f"{base_name}_{n}{output_ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
 
 
 # --- Drag&Drop класс ---
@@ -496,6 +499,10 @@ class VideoConverter(wx.Frame):
         self.btn_save_folder_browse = wx.Button(panel, label="Выбрать папку...")
         self.btn_save_folder_browse.Bind(wx.EVT_BUTTON, self.browse_save_folder)
 
+        self.toggle_suffix = wx.ToggleButton(panel, label="_conv", size=self.FromDIP(wx.Size(60, -1)))
+        self.toggle_suffix.SetToolTip("Добавлять суффикс к имени файла после конвертации")
+        self.toggle_suffix.SetValue(True)
+
         basket_icon = wx.ArtProvider.GetBitmap(wx.ART_DELETE, size=wx.Size(16, 16))
         self.btn_clear_save_folder = wx.BitmapButton(panel, bitmap=basket_icon, size=self.FromDIP(wx.Size(22, 22)))
         self.btn_clear_save_folder.SetToolTip(
@@ -516,6 +523,7 @@ class VideoConverter(wx.Frame):
         top.Add(self.save_folder_txt, 1, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
         top.Add(self.btn_save_folder_browse, 0, wx.TOP | wx.BOTTOM, self.FromDIP(8))
         top.Add(self.btn_clear_save_folder, 0, wx.RIGHT | wx.TOP | wx.BOTTOM, self.FromDIP(8))
+        top.Add(self.toggle_suffix, 0, wx.TOP | wx.BOTTOM, self.FromDIP(8))
         top.Add(self.btn_info_page, 0, wx.ALL, self.FromDIP(8))
 
         vbox.Add(top, 0, wx.EXPAND)
@@ -1088,7 +1096,7 @@ class VideoConverter(wx.Frame):
 
                 audio_channels = get_audio_channels(path, selected_track)
                 bitrate = get_audio_bitrate(audio_channels)
-                output_file = unique_output_path(self.save_folder, path)
+                output_file = unique_output_path(self.save_folder, path, self.toggle_suffix.GetValue())
 
                 wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏳ Конвертация...")
                 if gauge:
