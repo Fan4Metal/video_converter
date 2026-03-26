@@ -570,14 +570,21 @@ class VideoConverter(wx.Frame):
 
         # чтобы RadioBox не раздувал строку и выглядел аккуратно
         self.encode_mode.SetMinSize(self.FromDIP(wx.Size(430, -1)))
+        self.encode_mode.SetToolTip("""QP — уровень качества видео для NVENC.
+Меньше значение = лучше качество и больше размер файла.
+Больше значение = сильнее сжатие и меньше размер файла.
+Обычно разумный диапазон: 18–28
+
+CBR — постоянный битрейт видео.
+Чем выше значение, тем лучше качество и больше размер файла.
+Чем ниже значение, тем сильнее сжатие и меньше размер файла.
+Подходит, когда нужен предсказуемый размер или потоковая передача.""")
 
         encode_row.Add(self.encode_mode, 0, wx.ALL | wx.ALIGN_TOP, self.FromDIP(5))
 
         # слайдер качества (справа)
-        vbox_quality = wx.BoxSizer(wx.HORIZONTAL)
 
         self.slider_label = wx.StaticText(panel, label="Качество, QP:", size=self.FromDIP(wx.Size(90, -1)))
-        self.slider_label.SetToolTip("Качество кодирования\nQP : меньше = лучше\nCBR: больше = лучше")
         self.qp_slider = wx.Slider(
             panel,
             minValue=14,
@@ -589,6 +596,7 @@ class VideoConverter(wx.Frame):
         self.qp_label = wx.StaticText(panel, label="QP = 22", size=self.FromDIP(wx.Size(150, -1)))
         self.qp_slider.Bind(wx.EVT_SLIDER, self.on_qp_change)
 
+        vbox_quality = wx.BoxSizer(wx.HORIZONTAL)
         vbox_quality.Add(self.slider_label, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(8))
         vbox_quality.Add(self.qp_slider, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, self.FromDIP(10))
         vbox_quality.Add(self.qp_label, 0, wx.ALIGN_CENTER_VERTICAL)
