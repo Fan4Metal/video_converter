@@ -8,12 +8,12 @@ import threading
 import time
 import winreg
 import winsound
+from collections import Counter
 
 import wx
 from mutagen.mp4 import MP4, MP4StreamInfoError
 from wx.adv import AboutDialogInfo
 from wx.lib.agw import ultimatelistctrl as ULC
-
 
 # --- HiDPI (Windows only) ---
 if sys.platform.startswith("win"):
@@ -22,7 +22,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.2.6"
+__VERSION__ = "0.3.0"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -140,7 +140,15 @@ def run_ffprobe_json(args: list[str]) -> dict:
     Консоль НЕ скрываем.
     """
     try:
-        p = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         if not p.stdout.strip():
             return {}
         return json.loads(p.stdout)
@@ -157,26 +165,26 @@ def get_audio_tracks(filepath: str) -> list[str]:
     """
 
     def fix_encoding(text: str) -> str:
-        # если теги в cp1251
         try:
-            return text.encode("cp1251", "ignore").decode("utf-8", "ignore")
+            repaired = text.encode("cp1251").decode("utf-8")
         except Exception:
             return text
+        if any(marker in text for marker in ("Ð", "Ñ", "Â", "Ã")) and repaired:
+            return repaired
+        return text
 
-    data = run_ffprobe_json(
-        [
-            FFPROBE_PATH,
-            "-v",
-            "error",
-            "-select_streams",
-            "a",
-            "-show_entries",
-            "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
-            "-of",
-            "json",
-            filepath,
-        ]
-    )
+    data = run_ffprobe_json([
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
+        "-of",
+        "json",
+        filepath,
+    ])
 
     tracks: list[str] = []
     for stream in data.get("streams", []):
@@ -208,25 +216,89 @@ def get_audio_tracks(filepath: str) -> list[str]:
     return tracks
 
 
+def get_subtitle_tracks(filepath: str) -> list[dict]:
+    """
+    Возвращает субтитры в порядке s:0, s:1...
+    Для MP4 сохраняем только текстовые дорожки, которые ffmpeg умеет
+    перекодировать в mov_text.
+    """
+
+    def fix_encoding(text: str) -> str:
+        try:
+            repaired = text.encode("cp1251").decode("utf-8")
+        except Exception:
+            return text
+        if any(marker in text for marker in ("Ð", "Ñ", "Â", "Ã")) and repaired:
+            return repaired
+        return text
+
+    data = run_ffprobe_json([
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        "s",
+        "-show_entries",
+        "stream=index,codec_name:stream_tags=language,title",
+        "-of",
+        "json",
+        filepath,
+    ])
+
+    text_codecs = {
+        "subrip",
+        "ass",
+        "ssa",
+        "webvtt",
+        "mov_text",
+        "text",
+    }
+
+    tracks: list[dict] = []
+    for subtitle_order, stream in enumerate(data.get("streams", [])):
+        idx = stream.get("index", "?")
+        codec = stream.get("codec_name", "?")
+        tags = stream.get("tags", {}) or {}
+        lang = tags.get("language", "und")
+        title_raw = (tags.get("title") or "").strip()
+        title = fix_encoding(title_raw)
+        supported = str(codec).lower() in text_codecs
+
+        desc_parts = [f"{idx}: {codec}", lang]
+        if title:
+            desc_parts.append(f"«{title}»")
+        if not supported:
+            desc_parts.append("не для MP4")
+
+        tracks.append({
+            "order": subtitle_order,
+            "codec": codec,
+            "language": lang,
+            "title": title,
+            "supported": supported,
+            "display": f"{desc_parts[0]} (" + ", ".join(desc_parts[1:]) + ")",
+        })
+
+    return tracks
+
+
 def get_audio_channels(input_file: str, selected_track: int) -> int:
     """
     selected_track — это порядковый номер аудио-стрима среди аудио (a:0, a:1...),
     то есть именно то, что Choice.GetSelection() возвращает.
     """
-    data = run_ffprobe_json(
-        [
-            FFPROBE_PATH,
-            "-v",
-            "error",
-            "-select_streams",
-            f"a:{selected_track}",
-            "-show_entries",
-            "stream=channels",
-            "-of",
-            "json",
-            input_file,
-        ]
-    )
+    data = run_ffprobe_json([
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        f"a:{selected_track}",
+        "-show_entries",
+        "stream=channels",
+        "-of",
+        "json",
+        input_file,
+    ])
     try:
         return int((data.get("streams") or [{}])[0].get("channels") or 2)
     except Exception:
@@ -248,20 +320,18 @@ def get_hdr_info(file_path: str) -> dict:
         "dolby_profile": None,
     }
 
-    data = run_ffprobe_json(
-        [
-            FFPROBE_PATH,
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=pix_fmt,color_transfer,color_primaries,color_space:stream_tags:stream=side_data_list",
-            "-of",
-            "json",
-            file_path,
-        ]
-    )
+    data = run_ffprobe_json([
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=pix_fmt,color_transfer,color_primaries,color_space:stream_tags:stream=side_data_list",
+        "-of",
+        "json",
+        file_path,
+    ])
 
     streams = data.get("streams") or []
     if not streams:
@@ -275,14 +345,12 @@ def get_hdr_info(file_path: str) -> dict:
     color_space = (stream.get("color_space") or "").lower()
     pix_fmt = stream.get("pix_fmt") or "?"
 
-    result.update(
-        {
-            "pix_fmt": pix_fmt,
-            "color_transfer": color_transfer,
-            "color_primaries": color_primaries,
-            "color_space": color_space,
-        }
-    )
+    result.update({
+        "pix_fmt": pix_fmt,
+        "color_transfer": color_transfer,
+        "color_primaries": color_primaries,
+        "color_space": color_space,
+    })
 
     # Dolby Vision (очень приблизительно)
     dv_profile = None
@@ -342,23 +410,21 @@ def get_video_info(filepath: str) -> dict:
         "size": 0,
     }
 
-    data = run_ffprobe_json(
-        [
-            FFPROBE_PATH,
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            (
-                "stream=codec_name,width,height,r_frame_rate,bit_rate,display_aspect_ratio,"
-                "color_transfer,color_primaries,color_space:format=duration,bit_rate,size"
-            ),
-            "-of",
-            "json",
-            filepath,
-        ]
-    )
+    data = run_ffprobe_json([
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        (
+            "stream=codec_name,width,height,r_frame_rate,bit_rate,display_aspect_ratio,"
+            "color_transfer,color_primaries,color_space:format=duration,bit_rate,size"
+        ),
+        "-of",
+        "json",
+        filepath,
+    ])
 
     stream = (data.get("streams") or [{}])[0]
     fmt = data.get("format") or {}
@@ -442,6 +508,73 @@ class FileDropTarget(wx.FileDropTarget):
         return True
 
 
+class SubtitleCheckPopup(wx.ComboPopup):
+    def __init__(self):
+        super().__init__()
+        self.combo = None
+        self.checklist: wx.CheckListBox | None = None
+
+    def Init(self):
+        self.checklist = None
+
+    def Create(self, parent):
+        self.checklist = wx.CheckListBox(parent, choices=[])
+        self.checklist.Bind(wx.EVT_CHECKLISTBOX, self.on_check)
+        return True
+
+    def GetControl(self):
+        return self.checklist
+
+    def SetStringValue(self, value):
+        return
+
+    def GetStringValue(self):
+        return self.combo.GetValue() if self.combo else ""
+
+    def GetAdjustedSize(self, min_width, pref_height, max_height):
+        height = min(max_height, max(self.combo.FromDIP(80), min(self.combo.FromDIP(220), pref_height))) if self.combo else pref_height
+        return wx.Size(max(min_width, self.combo.FromDIP(240) if self.combo else min_width), height)
+
+    def on_check(self, event):
+        if self.combo:
+            self.combo.update_summary()
+        event.Skip()
+
+
+class SubtitleCheckCombo(wx.ComboCtrl):
+    def __init__(self, parent, choices: list[str]):
+        super().__init__(parent, style=wx.CB_READONLY)
+        self.choices = choices
+        self.popup = SubtitleCheckPopup()
+        self.SetPopupControl(self.popup)
+        self.popup.combo = self
+        self.SetValue("Нет субтитров" if not choices else "Не выбраны")
+        wx.CallAfter(self.populate_popup)
+
+    def populate_popup(self):
+        checklist = self.popup.checklist
+        if not checklist:
+            return
+        checklist.Set(self.choices)
+        self.update_summary()
+
+    def GetCheckedItems(self) -> list[int]:
+        checklist = self.popup.checklist
+        if not checklist:
+            return []
+        return [i for i in range(checklist.GetCount()) if checklist.IsChecked(i)]
+
+    def update_summary(self):
+        checked = self.GetCheckedItems()
+        if not self.choices:
+            text = "Нет субтитров"
+        elif not checked:
+            text = "Не выбраны"
+        else:
+            text = f"Выбраны: {len(checked)}"
+        self.SetValue(text)
+
+
 # --- Основное окно приложения ---
 class VideoConverter(wx.Frame):
     COL_FILE = 0
@@ -450,9 +583,10 @@ class VideoConverter(wx.Frame):
     COL_SIZE = 3
     COL_TIME = 4
     COL_AUDIO = 5
-    COL_SETTINGS = 6
-    COL_STATUS = 7
-    COL_PROGRESS = 8
+    COL_SUBTITLES = 6
+    COL_SETTINGS = 7
+    COL_STATUS = 8
+    COL_PROGRESS = 9
 
     def __init__(self):
         super().__init__(
@@ -542,9 +676,11 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_SIZE, "Размер", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
+        self.list.InsertColumn(self.COL_SUBTITLES, "Субтитры", width=self.FromDIP(240))
         self.list.InsertColumn(self.COL_SETTINGS, "Параметры", width=self.FromDIP(170))
         self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
+        self.list.SetColumnShown(self.COL_SUBTITLES, False)
 
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
@@ -642,6 +778,12 @@ CBR — постоянный битрейт видео.
         self.chk_copy_tags.SetValue(False)
         options_box.Add(self.chk_copy_tags, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
+        self.chk_save_subtitles = wx.CheckBox(panel, label="сохранить субтитры")
+        self.chk_save_subtitles.SetToolTip(wx.ToolTip("Показать колонку субтитров и сохранить отмеченные дорожки в MP4."))
+        self.chk_save_subtitles.SetValue(False)
+        self.chk_save_subtitles.Bind(wx.EVT_CHECKBOX, self.on_save_subtitles)
+        options_box.Add(self.chk_save_subtitles, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -678,6 +820,8 @@ CBR — постоянный битрейт видео.
 
         self.size_no_log = self.FromDIP(wx.Size(1535, 670))
         self.size_log = self.FromDIP(wx.Size(1535, 875))  # +205
+        self.size_no_log_subtitles = self.FromDIP(wx.Size(1835, 670))
+        self.size_log_subtitles = self.FromDIP(wx.Size(1835, 875))
         self.SetSize(self.size_no_log)
         self.SetMinSize(self.size_no_log)
         icon_path = get_resource_path("images/favicon.png")
@@ -697,7 +841,7 @@ CBR — постоянный битрейт видео.
             self.btn_start.Disable()
         ffmpeg_ver = get_ffmpeg_version(FFMPEG_PATH)
         if ffmpeg_ver != "FFmpeg не установлен":
-            self.log.AppendText(f"✅ FFmpeg {ffmpeg_ver['ffmpeg']}, Libavcodec {ffmpeg_ver['libavcodec']}\n")
+            self.log.AppendText(f"✅ FFmpeg: {ffmpeg_ver['ffmpeg']}, Libavcodec: {ffmpeg_ver['libavcodec']}\n")
 
         # загрузка папки для сохранения
         _save_path = get_reg("save_path")
@@ -706,14 +850,6 @@ CBR — постоянный битрейт видео.
             self.save_folder = _save_path
 
         self.Show()
-
-        # self.add_files(
-        #     [
-        #         R"D:\Films\testing\test1.mkv",
-        #         # R"D:\Films\testing\test2.mkv",
-        #         # R"D:\Films\testing\test3.mkv",
-        #     ]
-        # )
 
     # --- UI actions ---
     def browse_files(self, event):
@@ -734,6 +870,7 @@ CBR — постоянный битрейт видео.
             self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
 
             tracks = get_audio_tracks(path)
+            subtitles = get_subtitle_tracks(path)
             info = get_video_info(path)
 
             self.log.AppendText(
@@ -746,6 +883,9 @@ CBR — постоянный битрейт видео.
                 f"🔹Тип: {info['hdr_type']}\n"
                 f"🔹Длительность: {format_time(info['duration'])} ({info['duration']:.1f} сек)\n"
             )
+            subtitle_types = Counter(str(track.get("codec", "?")) for track in subtitles)
+            subtitle_info = ", ".join(f"{codec}: {count}" for codec, count in subtitle_types.items()) if subtitle_types else "нет"
+            self.log.AppendText(f"💬 Субтитры: {len(subtitles)} ({subtitle_info})\n")
 
             self.add_row(
                 path=path,
@@ -754,6 +894,7 @@ CBR — постоянный битрейт видео.
                 duration=float(info["duration"] or 0.0),
                 size_bytes=int(info["size"] or 0),
                 audio_choices=tracks,
+                subtitle_tracks=subtitles,
             )
 
     def on_remove_selected(self, event):
@@ -775,7 +916,7 @@ CBR — постоянный битрейт видео.
         # уничтожаем виджеты
         for row in list(self.row_widgets.keys()):
             w = self.row_widgets[row]
-            for key in ("choice", "gauge"):
+            for key in ("choice", "subtitles", "gauge"):
                 try:
                     ctrl = w.get(key)
                     if ctrl:
@@ -793,6 +934,11 @@ CBR — постоянный битрейт видео.
             try:
                 if w.get("choice"):
                     w["choice"].Destroy()
+            except Exception:
+                pass
+            try:
+                if w.get("subtitles"):
+                    w["subtitles"].Destroy()
             except Exception:
                 pass
             try:
@@ -860,17 +1006,39 @@ CBR — постоянный битрейт видео.
     def on_toggle_log(self, event):
         if self.log_visible:
             self.log.Hide()
-            self.SetMinSize(self.size_no_log)
-            self.SetSize(self.size_no_log)
             self.btn_toggle_log.SetLabel("📋 Показать лог")
-            self.Layout()
         else:
             self.log.Show()
-            self.SetMinSize(self.size_log)
-            self.SetSize(self.size_log)
             self.btn_toggle_log.SetLabel("📋 Скрыть лог")
-            self.Layout()
         self.log_visible = not self.log_visible
+        self.update_window_size()
+
+    def update_window_size(self):
+        if self.chk_save_subtitles.GetValue():
+            size = self.size_log_subtitles if self.log_visible else self.size_no_log_subtitles
+        else:
+            size = self.size_log if self.log_visible else self.size_no_log
+        self.SetMinSize(size)
+        self.SetSize(size)
+        self.Layout()
+
+    def on_save_subtitles(self, event):
+        enabled = self.chk_save_subtitles.GetValue()
+        if enabled:
+            for row in self.row_widgets:
+                self.create_subtitle_widget(row)
+        else:
+            for widgets in self.row_widgets.values():
+                subtitles = widgets.get("subtitles")
+                if subtitles:
+                    try:
+                        subtitles.Destroy()
+                    except Exception:
+                        pass
+                widgets["subtitles"] = None
+
+        self.list.SetColumnShown(self.COL_SUBTITLES, enabled)
+        self.update_window_size()
 
     def on_skip_video(self, event):
         if self.chk_skip_video.GetValue():
@@ -1014,7 +1182,16 @@ CBR — постоянный битрейт видео.
                 return
 
     # --- Rows ---
-    def add_row(self, path: str, resolution: str, bitrate: str, duration: float, size_bytes: int, audio_choices: list[str]):
+    def add_row(
+        self,
+        path: str,
+        resolution: str,
+        bitrate: str,
+        duration: float,
+        size_bytes: int,
+        audio_choices: list[str],
+        subtitle_tracks: list[dict],
+    ):
         row = self.list.GetItemCount()
 
         filename = os.path.basename(path)
@@ -1039,6 +1216,8 @@ CBR — постоянный битрейт видео.
         self.row_widgets[row] = {
             "path": path,
             "choice": choice,
+            "subtitles": None,
+            "subtitle_tracks": subtitle_tracks,
             "gauge": gauge,
             "duration": float(duration or 0.0),
             "settings": {
@@ -1051,6 +1230,17 @@ CBR — постоянный битрейт видео.
                 "skip_audio": "",
             },
         }
+        if self.chk_save_subtitles.GetValue():
+            self.create_subtitle_widget(row)
+
+    def create_subtitle_widget(self, row: int):
+        widgets = self.row_widgets.get(row)
+        if not widgets or widgets.get("subtitles"):
+            return
+        subtitle_choices = [track["display"] for track in widgets.get("subtitle_tracks", [])]
+        subtitles = SubtitleCheckCombo(self.list, choices=subtitle_choices)
+        self.list.SetItemWindow(row, self.COL_SUBTITLES, subtitles, expand=True)
+        widgets["subtitles"] = subtitles
 
     # --- Queue ---
     def on_convert(self, event):
@@ -1105,6 +1295,7 @@ CBR — постоянный битрейт видео.
                 audio_channels = get_audio_channels(path, selected_track)
                 bitrate = get_audio_bitrate(audio_channels)
                 output_file = unique_output_path(self.save_folder, path, self.toggle_suffix.GetValue())
+                selected_subtitles = self.get_selected_subtitles(widgets) if self.chk_save_subtitles.GetValue() else []
 
                 wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏳ Конвертация...")
                 if gauge:
@@ -1121,6 +1312,7 @@ CBR — постоянный битрейт видео.
                     selected_track=selected_track,
                     bitrate=bitrate,
                     audio_channels=audio_channels,
+                    selected_subtitles=selected_subtitles,
                     duration=duration,
                     gauge=gauge,
                     settings=settings,
@@ -1160,6 +1352,28 @@ CBR — постоянный битрейт видео.
     def on_item_select(self, event):
         self.global_settings = self.get_current_settings()
 
+    def get_selected_subtitles(self, widgets: dict) -> list[dict]:
+        subtitle_list: SubtitleCheckCombo | None = widgets.get("subtitles")
+        subtitle_tracks = widgets.get("subtitle_tracks") or []
+        if not subtitle_list:
+            return []
+
+        selected: list[dict] = []
+        skipped: list[str] = []
+        checked_items = set(subtitle_list.GetCheckedItems())
+        for i, track in enumerate(subtitle_tracks):
+            if i not in checked_items:
+                continue
+            if track.get("supported", False):
+                selected.append(track)
+            else:
+                skipped.append(track.get("display", str(track.get("order", i))))
+
+        for item in skipped:
+            wx.CallAfter(self.log.AppendText, f"⚠ Субтитры пропущены, MP4 не поддерживает: {item}\n")
+
+        return selected
+
     # --- FFmpeg ---
     def run_ffmpeg_with_progress(
         self,
@@ -1168,6 +1382,7 @@ CBR — постоянный битрейт видео.
         selected_track: int,
         bitrate: str,
         audio_channels: int,
+        selected_subtitles: list[dict],
         duration: float,
         gauge: wx.Gauge | None,
         settings: dict,
@@ -1196,6 +1411,24 @@ CBR — постоянный битрейт видео.
         else:
             audio_codec_args = ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate]
             wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
+
+        subtitle_map_args: list[str] = []
+        subtitle_codec_args: list[str] = ["-sn"]
+        subtitle_metadata_args: list[str] = []
+        if selected_subtitles:
+            for output_subtitle_index, track in enumerate(selected_subtitles):
+                subtitle_map_args.extend(["-map", f"0:s:{track['order']}"])
+                language = str(track.get("language") or "und")
+                title = str(track.get("title") or "").strip()
+                if language:
+                    subtitle_metadata_args.extend([f"-metadata:s:s:{output_subtitle_index}", f"language={language}"])
+                if title:
+                    subtitle_metadata_args.extend([f"-metadata:s:s:{output_subtitle_index}", f"title={title}"])
+                    subtitle_metadata_args.extend([f"-metadata:s:s:{output_subtitle_index}", f"handler_name={title}"])
+            subtitle_codec_args = ["-c:s", "mov_text"]
+            wx.CallAfter(self.log.AppendText, f"💬 Субтитры: {len(selected_subtitles)} дорожк(и), mov_text\n")
+        else:
+            wx.CallAfter(self.log.AppendText, "💬 Субтитры: нет\n")
 
         # video
         if not chk_skip_video:
@@ -1251,6 +1484,7 @@ CBR — постоянный битрейт видео.
                 "0:v:0",
                 "-map",
                 f"0:a:{selected_track}",
+                *subtitle_map_args,
                 "-c:v",
                 "h264_nvenc",
                 "-pix_fmt",
@@ -1271,9 +1505,10 @@ CBR — постоянный битрейт видео.
                 *audio_codec_args,
                 "-map_metadata",
                 "-1",
+                *subtitle_metadata_args,
                 "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
                 "filter_units=remove_types=6",
-                "-sn",
+                *subtitle_codec_args,
                 output_path,
             ]
         else:
@@ -1288,14 +1523,16 @@ CBR — постоянный битрейт видео.
                 "0:v:0",
                 "-map",
                 f"0:a:{selected_track}",
+                *subtitle_map_args,
                 "-c:v",
                 "copy",
                 *audio_codec_args,
                 "-map_metadata",
                 "-1",
+                *subtitle_metadata_args,
                 "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
                 "filter_units=remove_types=6",
-                "-sn",
+                *subtitle_codec_args,
                 output_path,
             ]
         try:
@@ -1437,6 +1674,7 @@ CBR — постоянный битрейт видео.
         self.qp_slider.Disable()
         self.encode_mode.Disable()
         self.btn_save_folder_browse.Disable()
+        self.chk_save_subtitles.Disable()
 
     def enable_interface(self):
         self.btn_add.Enable()
@@ -1445,6 +1683,7 @@ CBR — постоянный битрейт видео.
         self.qp_slider.Enable()
         self.encode_mode.Enable()
         self.btn_save_folder_browse.Enable()
+        self.chk_save_subtitles.Enable()
 
     def browse_save_folder(self, event):
         with wx.DirDialog(
