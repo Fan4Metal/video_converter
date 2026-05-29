@@ -787,6 +787,7 @@ CBR — постоянный битрейт видео.
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
+        self.min_client_width_to_debug = options_box.CalcMin().width + self.FromDIP(20)
 
         vbox.Add(options_box, 0, wx.LEFT | wx.TOP | wx.RIGHT | wx.BOTTOM, self.FromDIP(10))
 
@@ -820,10 +821,8 @@ CBR — постоянный битрейт видео.
 
         self.size_no_log = self.FromDIP(wx.Size(1535, 670))
         self.size_log = self.FromDIP(wx.Size(1535, 875))  # +205
-        self.size_no_log_subtitles = self.FromDIP(wx.Size(1835, 670))
-        self.size_log_subtitles = self.FromDIP(wx.Size(1835, 875))
         self.SetSize(self.size_no_log)
-        self.SetMinSize(self.size_no_log)
+        self.apply_min_window_size(self.size_no_log)
         icon_path = get_resource_path("images/favicon.png")
         if os.path.isfile(icon_path):
             try:
@@ -1014,13 +1013,21 @@ CBR — постоянный битрейт видео.
         self.update_window_size()
 
     def update_window_size(self):
-        if self.chk_save_subtitles.GetValue():
-            size = self.size_log_subtitles if self.log_visible else self.size_no_log_subtitles
-        else:
-            size = self.size_log if self.log_visible else self.size_no_log
-        self.SetMinSize(size)
-        self.SetSize(size)
+        position = self.GetPosition()
+        current_size = self.GetSize()
+        log_delta = self.size_log.height - self.size_no_log.height
+        height = current_size.height + log_delta if self.log_visible else current_size.height - log_delta
+        if not self.log_visible:
+            height = max(self.size_no_log.height, height)
+        self.log.SetMinSize(wx.Size(-1, self.FromDIP(200)))
+        self.apply_min_window_size(wx.Size(self.size_no_log.width, self.size_no_log.height))
+        self.SetSize(position.x, position.y, current_size.width, height)
+        self.SetPosition(position)
         self.Layout()
+
+    def apply_min_window_size(self, base_size):
+        min_size = wx.Size(self.ClientToWindowSize(wx.Size(self.min_client_width_to_debug, 0)).width, base_size.height)
+        self.SetMinSize(min_size)
 
     def on_save_subtitles(self, event):
         enabled = self.chk_save_subtitles.GetValue()
@@ -1038,7 +1045,7 @@ CBR — постоянный битрейт видео.
                 widgets["subtitles"] = None
 
         self.list.SetColumnShown(self.COL_SUBTITLES, enabled)
-        self.update_window_size()
+        self.Layout()
 
     def on_skip_video(self, event):
         if self.chk_skip_video.GetValue():
@@ -1322,10 +1329,10 @@ CBR — постоянный битрейт видео.
                     widgets.update({"output_file": output_file})
                     if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() == ".mp4":
                         if copy_mp4_tags(path, output_file):
-                            wx.CallAfter(self.log.AppendText, f"📌 Теги скопированы\n")
+                            wx.CallAfter(self.log.AppendText, "📌 Теги скопированы\n")
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
-                    wx.CallAfter(self.log.AppendText, f"\n ✅ Конвертация завершена\n")
+                    wx.CallAfter(self.log.AppendText, "\n ✅ Конвертация завершена\n")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
@@ -1805,7 +1812,7 @@ CBR — постоянный битрейт видео.
 Настройки качества: режим постоянного качества (QP) или режим постоянного битрейта (CBR).
 Работает только на компьютерах с видеокартой NVIDIA с поддержкой NVENC."""
         wx.Locale.AddCatalogLookupPathPrefix(".")
-        rus_locale = wx.Locale(wx.LANGUAGE_RUSSIAN)
+        rus_locale = wx.Locale(wx.LANGUAGE_RUSSIAN)  # noqa: F841
         info = AboutDialogInfo()
         info.SetName("Video Converter")
         info.SetVersion(__VERSION__)
