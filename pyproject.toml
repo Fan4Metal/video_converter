@@ -1,6 +1,6 @@
 [project]
 name = "video-converter"
-version = "0.3.0"
+version = "0.3.1"
 description = "Video converter: NVENC+AAC"
 readme = "README.md"
 requires-python = ">=3.14"
