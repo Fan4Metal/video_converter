@@ -911,40 +911,53 @@ CBR — постоянный битрейт видео.
                 self.add_files(dlg.GetPaths())
 
     def add_files(self, paths: list[str]):
+        # ffprobe-анализ медленный — выполняем его в фоне, чтобы не блокировать UI.
+        # Виджеты строк и лог создаются в UI-потоке через wx.CallAfter.
+        valid_paths = [p for p in paths if p and os.path.isfile(p)]
+        if not valid_paths:
+            return
+        threading.Thread(target=self._probe_files_worker, args=(valid_paths,), daemon=True).start()
+
+    def _probe_files_worker(self, paths: list[str]):
+        """Фоновый поток: анализирует файлы ffprobe и передаёт результат в UI-поток."""
         for path in paths:
-            if not path or not os.path.isfile(path):
+            try:
+                tracks = get_audio_tracks(path)
+                subtitles = get_subtitle_tracks(path)
+                info = get_video_info(path)
+            except Exception as e:
+                wx.CallAfter(self.log.AppendText, f"⚠ Не удалось проанализировать файл {path}: {e}\n")
                 continue
+            wx.CallAfter(self._on_file_probed, path, tracks, subtitles, info)
 
-            self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
+    def _on_file_probed(self, path: str, tracks: list[str], subtitles: list[dict], info: dict):
+        """Выполняется в UI-потоке: пишет лог и создаёт строку для проанализированного файла."""
+        self.log.AppendText(f"{'-' * 30}\nДобавлен файл: {path}\n")
 
-            tracks = get_audio_tracks(path)
-            subtitles = get_subtitle_tracks(path)
-            info = get_video_info(path)
+        self.log.AppendText(
+            "🎥 Видео:\n"
+            f"🔹Кодек: {info['codec']}\n"
+            f"🔹Разрешение: {info['width']}×{info['height']}\n"
+            f"🔹FPS: {info['fps']}\n"
+            f"🔹Соотношение сторон: {info['aspect']}\n"
+            f"🔹Битрейт: {info['bitrate']}\n"
+            f"🔹Тип: {info['hdr_type']}\n"
+            f"🔹Длительность: {format_time(info['duration'])} ({info['duration']:.1f} сек)\n"
+        )
+        subtitle_types = Counter(str(track.get("codec", "?")) for track in subtitles)
+        subtitle_info = ", ".join(f"{codec}: {count}" for codec, count in subtitle_types.items()) if subtitle_types else "нет"
+        self.log.AppendText(f"💬 Субтитры: {len(subtitles)} ({subtitle_info})\n")
 
-            self.log.AppendText(
-                "🎥 Видео:\n"
-                f"🔹Кодек: {info['codec']}\n"
-                f"🔹Разрешение: {info['width']}×{info['height']}\n"
-                f"🔹FPS: {info['fps']}\n"
-                f"🔹Соотношение сторон: {info['aspect']}\n"
-                f"🔹Битрейт: {info['bitrate']}\n"
-                f"🔹Тип: {info['hdr_type']}\n"
-                f"🔹Длительность: {format_time(info['duration'])} ({info['duration']:.1f} сек)\n"
-            )
-            subtitle_types = Counter(str(track.get("codec", "?")) for track in subtitles)
-            subtitle_info = ", ".join(f"{codec}: {count}" for codec, count in subtitle_types.items()) if subtitle_types else "нет"
-            self.log.AppendText(f"💬 Субтитры: {len(subtitles)} ({subtitle_info})\n")
-
-            self.add_row(
-                path=path,
-                resolution=f"{info['width']}×{info['height']}",
-                bitrate=str(info["bitrate"]),
-                duration=float(info["duration"] or 0.0),
-                size_bytes=int(info["size"] or 0),
-                audio_choices=tracks,
-                subtitle_tracks=subtitles,
-                video_info=info,
-            )
+        self.add_row(
+            path=path,
+            resolution=f"{info['width']}×{info['height']}",
+            bitrate=str(info["bitrate"]),
+            duration=float(info["duration"] or 0.0),
+            size_bytes=int(info["size"] or 0),
+            audio_choices=tracks,
+            subtitle_tracks=subtitles,
+            video_info=info,
+        )
 
     def on_remove_selected(self, event):
         if self.converting:
