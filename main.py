@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import wx
-from mutagen.mp4 import MP4, MP4StreamInfoError
+from mutagen.mp4 import MP4
 from wx.adv import AboutDialogInfo
 from wx.lib.agw import ultimatelistctrl as ULC
 
@@ -116,18 +116,20 @@ def get_reg(name):
         return
 
 
-def copy_mp4_tags(source_path: str, dest_path: str):
+def copy_mp4_tags(source_path: str, dest_path: str) -> tuple[bool, str]:
+    """
+    Копирует MP4-теги из исходного файла в выходной.
+    Возвращает (успех, текст_ошибки); текст ошибки пустой при успехе.
+    """
     try:
         video = MP4(source_path)
         new_video = MP4(dest_path)
         for tag in video.tags:
             new_video.tags[tag] = video.tags[tag]
         new_video.save()
-        return True
-    except MP4StreamInfoError as e:
-        print(e)
+        return True, ""
     except Exception as e:
-        print(e)
+        return False, str(e)
 
 
 def read_from_txt(path: str) -> str:
@@ -1444,8 +1446,11 @@ CBR — постоянный битрейт видео.
                 if ok and not self.cancel_event.is_set():
                     widgets.update({"output_file": output_file})
                     if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() == ".mp4":
-                        if copy_mp4_tags(path, output_file):
+                        tags_ok, tags_err = copy_mp4_tags(path, output_file)
+                        if tags_ok:
                             wx.CallAfter(self.log.AppendText, "📌 Теги скопированы\n")
+                        else:
+                            wx.CallAfter(self.log.AppendText, f"⚠ Не удалось скопировать теги: {tags_err}\n")
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
                     wx.CallAfter(self.log.AppendText, "\n ✅ Конвертация завершена\n")
