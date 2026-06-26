@@ -60,6 +60,37 @@ def get_ffmpeg_version(ffmpeg_path: str) -> dict:
         return "FFmpeg не установлен"
 
 
+def check_nvenc_available(ffmpeg_path: str) -> bool:
+    """
+    Проверяет, доступен ли аппаратный энкодер NVIDIA NVENC (h264_nvenc).
+    Делает короткий тестовый прогон на синтетическом источнике: если энкодер
+    отсутствует или нет совместимой видеокарты, ffmpeg вернёт ненулевой код.
+    """
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-f",
+                "lavfi",
+                "-i",
+                "nullsrc=s=256x256:d=0.1",
+                "-c:v",
+                "h264_nvenc",
+                "-f",
+                "null",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=20,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def save_reg(name: str, data: str):
     """
     Сохраняет в реестре параметры приложения.
@@ -613,6 +644,8 @@ class VideoConverter(wx.Frame):
         self.qp_value = 22
         self.bitrate_value = 8
         self.log_visible = False
+        self.global_settings: dict | None = None
+        self.nvenc_available = True
 
         # layout
         vbox = wx.BoxSizer(wx.VERTICAL)
@@ -842,6 +875,17 @@ CBR — постоянный битрейт видео.
         if ffmpeg_ver != "FFmpeg не установлен":
             self.log.AppendText(f"✅ FFmpeg: {ffmpeg_ver['ffmpeg']}, Libavcodec: {ffmpeg_ver['libavcodec']}\n")
 
+        # проверка аппаратного энкодера NVENC
+        if os.path.isfile(FFMPEG_PATH):
+            self.nvenc_available = check_nvenc_available(FFMPEG_PATH)
+            if self.nvenc_available:
+                self.log.AppendText("✅ NVENC (NVIDIA) доступен: используется аппаратное ускорение (h264_nvenc)\n")
+            else:
+                self.log.AppendText(
+                    "⚠ NVENC недоступен (нет видеокарты NVIDIA или поддержки).\n"
+                    "   Будет использовано программное кодирование на CPU (libx264) — медленнее.\n"
+                )
+
         # загрузка папки для сохранения
         _save_path = get_reg("save_path")
         if _save_path and os.path.isdir(_save_path):
@@ -894,6 +938,7 @@ CBR — постоянный битрейт видео.
                 size_bytes=int(info["size"] or 0),
                 audio_choices=tracks,
                 subtitle_tracks=subtitles,
+                video_info=info,
             )
 
     def on_remove_selected(self, event):
@@ -1198,6 +1243,7 @@ CBR — постоянный битрейт видео.
         size_bytes: int,
         audio_choices: list[str],
         subtitle_tracks: list[dict],
+        video_info: dict | None = None,
     ):
         row = self.list.GetItemCount()
 
@@ -1227,6 +1273,7 @@ CBR — постоянный битрейт видео.
             "subtitle_tracks": subtitle_tracks,
             "gauge": gauge,
             "duration": float(duration or 0.0),
+            "info": video_info or {},
             "settings": {
                 "global": True,
                 "encode_mode": "",
@@ -1323,6 +1370,7 @@ CBR — постоянный битрейт видео.
                     duration=duration,
                     gauge=gauge,
                     settings=settings,
+                    video_info=widgets.get("info") or {},
                 )
 
                 if ok and not self.cancel_event.is_set():
@@ -1393,7 +1441,9 @@ CBR — постоянный битрейт видео.
         duration: float,
         gauge: wx.Gauge | None,
         settings: dict,
+        video_info: dict | None = None,
     ) -> bool:
+        video_info = video_info or {}
 
         if not settings.get("global", True):
             chk_skip_audio = settings.get("skip_audio", False)
@@ -1439,9 +1489,14 @@ CBR — постоянный битрейт видео.
 
         # video
         if not chk_skip_video:
-            hdr = get_hdr_info(input_path)
-            hdr_type = hdr["type"]
-            auto_tonemap = bool(hdr["requires_tonemap"])
+            # Используем данные, собранные при добавлении файла (кэш), без повторного запуска ffprobe.
+            if "requires_tonemap" in video_info:
+                hdr_type = video_info.get("hdr_type") or "SDR"
+                auto_tonemap = bool(video_info.get("requires_tonemap"))
+            else:
+                hdr = get_hdr_info(input_path)
+                hdr_type = hdr["type"]
+                auto_tonemap = bool(hdr["requires_tonemap"])
 
             if tonemap_mode == 2:
                 needs_tonemap = False
@@ -1454,12 +1509,18 @@ CBR — постоянный битрейт видео.
 
             scale_filter = ""
             if chk_limit_res:
-                vinfo = get_video_info(input_path)
                 try:
-                    w = int(vinfo.get("width") or 0)
-                    h = int(vinfo.get("height") or 0)
+                    w = int(video_info.get("width") or 0)
+                    h = int(video_info.get("height") or 0)
                 except Exception:
                     w, h = 0, 0
+                if not (w and h):
+                    vinfo = get_video_info(input_path)
+                    try:
+                        w = int(vinfo.get("width") or 0)
+                        h = int(vinfo.get("height") or 0)
+                    except Exception:
+                        w, h = 0, 0
                 if w > 1920 or h > 1080:
                     scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
 
@@ -1473,13 +1534,38 @@ CBR — постоянный битрейт видео.
             else:
                 vf_filter = f"format=yuv420p{scale_filter}"
 
-            if encode_mode == 0:
-                video_codec_args = ["-rc", "vbr", "-cq", str(qp_slider), "-b:v", "0", "-qmin", "0"]
-                wx.CallAfter(self.log.AppendText, f"🎯 Режим: QP={qp_slider}\n")
+            if self.nvenc_available:
+                if encode_mode == 0:
+                    rc_args = ["-rc", "vbr", "-cq", str(qp_slider), "-b:v", "0", "-qmin", "0"]
+                    wx.CallAfter(self.log.AppendText, f"🎯 Режим: NVENC, QP={qp_slider}\n")
+                else:
+                    target_bitrate = f"{int(qp_slider * 1000)}k"
+                    rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                    wx.CallAfter(self.log.AppendText, f"📦 Режим: NVENC, CBR={target_bitrate}\n")
+                video_encoder_args = [
+                    "-c:v", "h264_nvenc",
+                    "-preset", "p4",
+                    *rc_args,
+                    "-profile:v", "high",
+                    "-tune", "hq",
+                    "-b_ref_mode", "middle",
+                    "-spatial_aq", "1",
+                ]
             else:
-                target_bitrate = f"{int(qp_slider * 1000)}k"
-                video_codec_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
-                wx.CallAfter(self.log.AppendText, f"📦 Режим: CBR={target_bitrate}\n")
+                # Программный фолбэк на CPU, если аппаратный NVENC недоступен.
+                if encode_mode == 0:
+                    rc_args = ["-crf", str(qp_slider)]
+                    wx.CallAfter(self.log.AppendText, f"🎯 Режим: CPU (libx264), CRF={qp_slider}\n")
+                else:
+                    target_bitrate = f"{int(qp_slider * 1000)}k"
+                    rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                    wx.CallAfter(self.log.AppendText, f"📦 Режим: CPU (libx264), CBR={target_bitrate}\n")
+                video_encoder_args = [
+                    "-c:v", "libx264",
+                    "-preset", "medium",
+                    *rc_args,
+                    "-profile:v", "high",
+                ]
 
             cmd = [
                 FFMPEG_PATH,
@@ -1492,23 +1578,11 @@ CBR — постоянный битрейт видео.
                 "-map",
                 f"0:a:{selected_track}",
                 *subtitle_map_args,
-                "-c:v",
-                "h264_nvenc",
                 "-pix_fmt",
                 "yuv420p",
                 "-vf",
                 vf_filter,
-                "-preset",
-                "p4",
-                *video_codec_args,
-                "-profile:v",
-                "high",
-                "-tune",
-                "hq",
-                "-b_ref_mode",
-                "middle",
-                "-spatial_aq",
-                "1",
+                *video_encoder_args,
                 *audio_codec_args,
                 "-map_metadata",
                 "-1",
@@ -1546,7 +1620,7 @@ CBR — постоянный битрейт видео.
             self.process = subprocess.Popen(
                 cmd,
                 stderr=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -1810,7 +1884,7 @@ CBR — постоянный битрейт видео.
 Выходной формат: MP4.
 Видеокодек: NVENC (H.264), аудиокодек: AAC.
 Настройки качества: режим постоянного качества (QP) или режим постоянного битрейта (CBR).
-Работает только на компьютерах с видеокартой NVIDIA с поддержкой NVENC."""
+Для аппаратного ускорения нужна видеокарта NVIDIA с поддержкой NVENC. Если NVENC недоступен, используется программное кодирование на CPU (libx264)."""
         wx.Locale.AddCatalogLookupPathPrefix(".")
         rus_locale = wx.Locale(wx.LANGUAGE_RUSSIAN)  # noqa: F841
         info = AboutDialogInfo()
