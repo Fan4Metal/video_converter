@@ -201,29 +201,38 @@ def run_ffprobe_json(args: list[str]) -> dict:
         return {}
 
 
-def get_audio_tracks(filepath: str) -> list[str]:
+def probe_media(filepath: str) -> dict:
     """
-    Возвращает список строк для Choice.
-    Важно: stream.index у ffprobe — это индекс потока в контейнере (может быть 1,2,3...),
-    а выбор у пользователя будет 0..N-1 (порядок аудио-стримов).
-    Мы показываем stream.index в тексте, но мапим по порядку (a:0, a:1...).
+    Один вызов ffprobe со всеми потоками и форматом.
+    Возвращает полный JSON (или {}); результат можно разобрать
+    функциями parse_* без повторных запусков ffprobe.
     """
-
-    data = run_ffprobe_json([
+    return run_ffprobe_json([
         FFPROBE_PATH,
         "-v",
         "error",
-        "-select_streams",
-        "a",
-        "-show_entries",
-        "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
+        "-show_streams",
+        "-show_format",
         "-of",
         "json",
         filepath,
     ])
 
+
+def _streams_of_type(probe: dict, codec_type: str) -> list[dict]:
+    """Потоки заданного типа (audio/video/subtitle) в порядке контейнера."""
+    return [s for s in (probe.get("streams") or []) if s.get("codec_type") == codec_type]
+
+
+def parse_audio_tracks(probe: dict) -> list[str]:
+    """
+    Возвращает список строк для Choice по разобранному ffprobe-JSON.
+    Важно: stream.index у ffprobe — это индекс потока в контейнере (может быть 1,2,3...),
+    а выбор у пользователя будет 0..N-1 (порядок аудио-стримов).
+    Мы показываем stream.index в тексте, но мапим по порядку (a:0, a:1...).
+    """
     tracks: list[str] = []
-    for stream in data.get("streams", []):
+    for stream in _streams_of_type(probe, "audio"):
         idx = stream.get("index", "?")
         codec = stream.get("codec_name", "?")
         ch = stream.get("channels", "?")
@@ -252,26 +261,16 @@ def get_audio_tracks(filepath: str) -> list[str]:
     return tracks
 
 
-def get_subtitle_tracks(filepath: str) -> list[dict]:
+def get_audio_tracks(filepath: str) -> list[str]:
+    return parse_audio_tracks(probe_media(filepath))
+
+
+def parse_subtitle_tracks(probe: dict) -> list[dict]:
     """
-    Возвращает субтитры в порядке s:0, s:1...
+    Возвращает субтитры в порядке s:0, s:1... по разобранному ffprobe-JSON.
     Для MP4 сохраняем только текстовые дорожки, которые ffmpeg умеет
     перекодировать в mov_text.
     """
-
-    data = run_ffprobe_json([
-        FFPROBE_PATH,
-        "-v",
-        "error",
-        "-select_streams",
-        "s",
-        "-show_entries",
-        "stream=index,codec_name:stream_tags=language,title",
-        "-of",
-        "json",
-        filepath,
-    ])
-
     text_codecs = {
         "subrip",
         "ass",
@@ -282,7 +281,7 @@ def get_subtitle_tracks(filepath: str) -> list[dict]:
     }
 
     tracks: list[dict] = []
-    for subtitle_order, stream in enumerate(data.get("streams", [])):
+    for subtitle_order, stream in enumerate(_streams_of_type(probe, "subtitle")):
         idx = stream.get("index", "?")
         codec = stream.get("codec_name", "?")
         tags = stream.get("tags", {}) or {}
@@ -309,6 +308,10 @@ def get_subtitle_tracks(filepath: str) -> list[dict]:
     return tracks
 
 
+def get_subtitle_tracks(filepath: str) -> list[dict]:
+    return parse_subtitle_tracks(probe_media(filepath))
+
+
 def get_audio_channels(input_file: str, selected_track: int) -> int:
     """
     selected_track — это порядковый номер аудио-стрима среди аудио (a:0, a:1...),
@@ -332,9 +335,9 @@ def get_audio_channels(input_file: str, selected_track: int) -> int:
         return 2
 
 
-def get_hdr_info(file_path: str) -> dict:
+def parse_hdr_info(probe: dict) -> dict:
     """
-    Упрощённый HDR анализ.
+    Упрощённый HDR анализ по первому видеопотоку из разобранного ffprobe-JSON.
     """
     result = {
         "is_hdr": False,
@@ -347,20 +350,7 @@ def get_hdr_info(file_path: str) -> dict:
         "dolby_profile": None,
     }
 
-    data = run_ffprobe_json([
-        FFPROBE_PATH,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=pix_fmt,color_transfer,color_primaries,color_space:stream_tags:stream=side_data_list",
-        "-of",
-        "json",
-        file_path,
-    ])
-
-    streams = data.get("streams") or []
+    streams = _streams_of_type(probe, "video")
     if not streams:
         return result
 
@@ -423,7 +413,12 @@ def get_hdr_info(file_path: str) -> dict:
     return result
 
 
-def get_video_info(filepath: str) -> dict:
+def get_hdr_info(file_path: str) -> dict:
+    return parse_hdr_info(probe_media(file_path))
+
+
+def parse_video_info(probe: dict) -> dict:
+    """Сводная информация о первом видеопотоке и контейнере из разобранного ffprobe-JSON."""
     info = {
         "codec": "?",
         "width": "?",
@@ -437,24 +432,9 @@ def get_video_info(filepath: str) -> dict:
         "size": 0,
     }
 
-    data = run_ffprobe_json([
-        FFPROBE_PATH,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        (
-            "stream=codec_name,width,height,r_frame_rate,bit_rate,display_aspect_ratio,"
-            "color_transfer,color_primaries,color_space:format=duration,bit_rate,size"
-        ),
-        "-of",
-        "json",
-        filepath,
-    ])
-
-    stream = (data.get("streams") or [{}])[0]
-    fmt = data.get("format") or {}
+    videos = _streams_of_type(probe, "video")
+    stream = videos[0] if videos else {}
+    fmt = probe.get("format") or {}
 
     info["codec"] = stream.get("codec_name", "?")
     info["width"] = stream.get("width", "?")
@@ -486,11 +466,15 @@ def get_video_info(filepath: str) -> dict:
     except Exception:
         info["duration"] = 0.0
 
-    hdr = get_hdr_info(filepath)
+    hdr = parse_hdr_info(probe)
     info["hdr_type"] = hdr["type"]
     info["requires_tonemap"] = bool(hdr["requires_tonemap"])
 
     return info
+
+
+def get_video_info(filepath: str) -> dict:
+    return parse_video_info(probe_media(filepath))
 
 
 def unique_output_path(save_folder: str, input_path: str, add_conv_suffix: bool = True, output_ext: str = ".mp4") -> str:
@@ -922,9 +906,10 @@ CBR — постоянный битрейт видео.
         """Фоновый поток: анализирует файлы ffprobe и передаёт результат в UI-поток."""
         for path in paths:
             try:
-                tracks = get_audio_tracks(path)
-                subtitles = get_subtitle_tracks(path)
-                info = get_video_info(path)
+                probe = probe_media(path)  # один вызов ffprobe вместо четырёх
+                tracks = parse_audio_tracks(probe)
+                subtitles = parse_subtitle_tracks(probe)
+                info = parse_video_info(probe)
             except Exception as e:
                 wx.CallAfter(self.log.AppendText, f"⚠ Не удалось проанализировать файл {path}: {e}\n")
                 continue
