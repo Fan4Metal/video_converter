@@ -134,6 +134,20 @@ def read_from_txt(path: str) -> str:
         return f.read()
 
 
+def fix_text_encoding(text: str) -> str:
+    """
+    Чинит частый случай mojibake: текст в UTF-8, ошибочно прочитанный как cp1251.
+    Возвращает исходную строку, если перекодировка не нужна или невозможна.
+    """
+    try:
+        repaired = text.encode("cp1251").decode("utf-8")
+    except Exception:
+        return text
+    if any(marker in text for marker in ("Ð", "Ñ", "Â", "Ã")) and repaired:
+        return repaired
+    return text
+
+
 def format_time(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
@@ -195,15 +209,6 @@ def get_audio_tracks(filepath: str) -> list[str]:
     Мы показываем stream.index в тексте, но мапим по порядку (a:0, a:1...).
     """
 
-    def fix_encoding(text: str) -> str:
-        try:
-            repaired = text.encode("cp1251").decode("utf-8")
-        except Exception:
-            return text
-        if any(marker in text for marker in ("Ð", "Ñ", "Â", "Ã")) and repaired:
-            return repaired
-        return text
-
     data = run_ffprobe_json([
         FFPROBE_PATH,
         "-v",
@@ -227,7 +232,7 @@ def get_audio_tracks(filepath: str) -> list[str]:
 
         lang = tags.get("language", "und")
         title_raw = (tags.get("title") or "").strip()
-        title = fix_encoding(title_raw)
+        title = fix_text_encoding(title_raw)
 
         if br:
             try:
@@ -253,15 +258,6 @@ def get_subtitle_tracks(filepath: str) -> list[dict]:
     Для MP4 сохраняем только текстовые дорожки, которые ffmpeg умеет
     перекодировать в mov_text.
     """
-
-    def fix_encoding(text: str) -> str:
-        try:
-            repaired = text.encode("cp1251").decode("utf-8")
-        except Exception:
-            return text
-        if any(marker in text for marker in ("Ð", "Ñ", "Â", "Ã")) and repaired:
-            return repaired
-        return text
 
     data = run_ffprobe_json([
         FFPROBE_PATH,
@@ -292,7 +288,7 @@ def get_subtitle_tracks(filepath: str) -> list[dict]:
         tags = stream.get("tags", {}) or {}
         lang = tags.get("language", "und")
         title_raw = (tags.get("title") or "").strip()
-        title = fix_encoding(title_raw)
+        title = fix_text_encoding(title_raw)
         supported = str(codec).lower() in text_codecs
 
         desc_parts = [f"{idx}: {codec}", lang]
@@ -1858,14 +1854,6 @@ CBR — постоянный битрейт видео.
             if self.global_settings.get("skip_video", False):
                 self.on_skip_video(None)
             self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
-
-    def set_settings_to_selected_rows(self):
-        item_index = self.list.GetFirstSelected()
-        while item_index != -1:
-            item_text = self.list.GetItemText(item_index)
-            print(f"Выбрана строка {item_index}: {item_text}")
-
-            item_index = self.list.GetNextSelected(item_index)
 
     def get_row_settings_string(self, row: int, settings: dict):
         if settings.get("skip_video", False):
