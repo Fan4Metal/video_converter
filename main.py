@@ -1484,45 +1484,30 @@ CBR — постоянный битрейт видео.
         return selected
 
     # --- FFmpeg ---
-    def run_ffmpeg_with_progress(
-        self,
-        input_path: str,
-        output_path: str,
-        selected_track: int,
-        bitrate: str,
-        audio_channels: int,
-        selected_subtitles: list[dict],
-        duration: float,
-        gauge: wx.Gauge | None,
-        settings: dict,
-        video_info: dict | None = None,
-    ) -> bool:
-        video_info = video_info or {}
+    def _resolve_effective_settings(self, settings: dict) -> dict:
+        """
+        Возвращает действующие настройки кодирования: либо настройки строки
+        (если они не «глобальные»), либо текущие значения панели управления.
+        """
+        src = settings if not settings.get("global", True) else self.get_current_settings()
+        return {
+            "skip_audio": src.get("skip_audio", False),
+            "skip_video": src.get("skip_video", False),
+            "encode_mode": src.get("encode_mode", 0),
+            "qp_slider": src.get("qp_slider", 22),
+            "limit_res": src.get("limit_res", False),
+            "tonemapping": src.get("tonemapping", 0),
+        }
 
-        if not settings.get("global", True):
-            chk_skip_audio = settings.get("skip_audio", False)
-            chk_skip_video = settings.get("skip_video", False)
-            encode_mode = settings.get("encode_mode", 0)
-            qp_slider = settings.get("qp_slider", 22)
-            chk_limit_res = settings.get("limit_res", False)
-            tonemap_mode = settings.get("tonemapping", 0)
-        else:
-            global_settings = self.get_current_settings()
-            chk_skip_audio = global_settings.get("skip_audio", False)
-            chk_skip_video = global_settings.get("skip_video", False)
-            encode_mode = global_settings.get("encode_mode", 0)
-            qp_slider = global_settings.get("qp_slider", 22)
-            chk_limit_res = global_settings.get("limit_res", False)
-            tonemap_mode = global_settings.get("tonemapping", 0)
-
-        # audio
-        if chk_skip_audio:
-            audio_codec_args = ["-c:a", "copy"]
+    def _build_audio_args(self, skip_audio: bool, audio_channels: int, bitrate: str) -> list[str]:
+        if skip_audio:
             wx.CallAfter(self.log.AppendText, "🎵 Аудио: copy\n")
-        else:
-            audio_codec_args = ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate]
-            wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
+            return ["-c:a", "copy"]
+        wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
+        return ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate]
 
+    def _build_subtitle_args(self, selected_subtitles: list[dict]) -> tuple[list[str], list[str], list[str]]:
+        """Возвращает (map_args, codec_args, metadata_args) для субтитров."""
         subtitle_map_args: list[str] = []
         subtitle_codec_args: list[str] = ["-sn"]
         subtitle_metadata_args: list[str] = []
@@ -1540,136 +1525,155 @@ CBR — постоянный битрейт видео.
             wx.CallAfter(self.log.AppendText, f"💬 Субтитры: {len(selected_subtitles)} дорожк(и), mov_text\n")
         else:
             wx.CallAfter(self.log.AppendText, "💬 Субтитры: нет\n")
+        return subtitle_map_args, subtitle_codec_args, subtitle_metadata_args
 
-        # video
-        if not chk_skip_video:
-            # Используем данные, собранные при добавлении файла (кэш), без повторного запуска ffprobe.
-            if "requires_tonemap" in video_info:
-                hdr_type = video_info.get("hdr_type") or "SDR"
-                auto_tonemap = bool(video_info.get("requires_tonemap"))
-            else:
-                hdr = get_hdr_info(input_path)
-                hdr_type = hdr["type"]
-                auto_tonemap = bool(hdr["requires_tonemap"])
+    def _build_video_args(
+        self,
+        input_path: str,
+        video_info: dict,
+        skip_video: bool,
+        encode_mode: int,
+        qp_slider: int,
+        limit_res: bool,
+        tonemap_mode: int,
+    ) -> list[str]:
+        """
+        Возвращает аргументы видео для ffmpeg: либо ["-c:v", "copy"], либо
+        полный набор фильтров/энкодера (NVENC или CPU-фолбэк).
+        """
+        if skip_video:
+            wx.CallAfter(self.log.AppendText, "🎥 Видео: copy\n")
+            return ["-c:v", "copy"]
 
-            if tonemap_mode == 2:
-                needs_tonemap = False
-            elif tonemap_mode == 1:
-                needs_tonemap = True
-            else:
-                needs_tonemap = auto_tonemap
+        # Используем данные, собранные при добавлении файла (кэш), без повторного запуска ffprobe.
+        if "requires_tonemap" in video_info:
+            hdr_type = video_info.get("hdr_type") or "SDR"
+            auto_tonemap = bool(video_info.get("requires_tonemap"))
+        else:
+            hdr = get_hdr_info(input_path)
+            hdr_type = hdr["type"]
+            auto_tonemap = bool(hdr["requires_tonemap"])
 
-            wx.CallAfter(self.log.AppendText, f"🎨 Видео: {hdr_type}, tonemap={'on' if needs_tonemap else 'off'}\n")
+        if tonemap_mode == 2:
+            needs_tonemap = False
+        elif tonemap_mode == 1:
+            needs_tonemap = True
+        else:
+            needs_tonemap = auto_tonemap
 
-            scale_filter = ""
-            if chk_limit_res:
+        wx.CallAfter(self.log.AppendText, f"🎨 Видео: {hdr_type}, tonemap={'on' if needs_tonemap else 'off'}\n")
+
+        scale_filter = ""
+        if limit_res:
+            try:
+                w = int(video_info.get("width") or 0)
+                h = int(video_info.get("height") or 0)
+            except Exception:
+                w, h = 0, 0
+            if not (w and h):
+                vinfo = get_video_info(input_path)
                 try:
-                    w = int(video_info.get("width") or 0)
-                    h = int(video_info.get("height") or 0)
+                    w = int(vinfo.get("width") or 0)
+                    h = int(vinfo.get("height") or 0)
                 except Exception:
                     w, h = 0, 0
-                if not (w and h):
-                    vinfo = get_video_info(input_path)
-                    try:
-                        w = int(vinfo.get("width") or 0)
-                        h = int(vinfo.get("height") or 0)
-                    except Exception:
-                        w, h = 0, 0
-                if w > 1920 or h > 1080:
-                    scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
+            if w > 1920 or h > 1080:
+                scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
 
-            if needs_tonemap:
-                vf_filter = (
-                    "zscale=t=linear:npl=30,format=gbrpf32le,"
-                    "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
-                    "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
-                    f"{scale_filter}"
-                )
+        if needs_tonemap:
+            vf_filter = (
+                "zscale=t=linear:npl=30,format=gbrpf32le,"
+                "zscale=p=bt709,tonemap=hable:param=1.5:desat=0,"
+                "zscale=t=bt709:m=bt709:r=pc,format=yuv420p"
+                f"{scale_filter}"
+            )
+        else:
+            vf_filter = f"format=yuv420p{scale_filter}"
+
+        if self.nvenc_available:
+            if encode_mode == 0:
+                rc_args = ["-rc", "vbr", "-cq", str(qp_slider), "-b:v", "0", "-qmin", "0"]
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: NVENC, QP={qp_slider}\n")
             else:
-                vf_filter = f"format=yuv420p{scale_filter}"
-
-            if self.nvenc_available:
-                if encode_mode == 0:
-                    rc_args = ["-rc", "vbr", "-cq", str(qp_slider), "-b:v", "0", "-qmin", "0"]
-                    wx.CallAfter(self.log.AppendText, f"🎯 Режим: NVENC, QP={qp_slider}\n")
-                else:
-                    target_bitrate = f"{int(qp_slider * 1000)}k"
-                    rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
-                    wx.CallAfter(self.log.AppendText, f"📦 Режим: NVENC, CBR={target_bitrate}\n")
-                video_encoder_args = [
-                    "-c:v", "h264_nvenc",
-                    "-preset", "p4",
-                    *rc_args,
-                    "-profile:v", "high",
-                    "-tune", "hq",
-                    "-b_ref_mode", "middle",
-                    "-spatial_aq", "1",
-                ]
-            else:
-                # Программный фолбэк на CPU, если аппаратный NVENC недоступен.
-                if encode_mode == 0:
-                    rc_args = ["-crf", str(qp_slider)]
-                    wx.CallAfter(self.log.AppendText, f"🎯 Режим: CPU (libx264), CRF={qp_slider}\n")
-                else:
-                    target_bitrate = f"{int(qp_slider * 1000)}k"
-                    rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
-                    wx.CallAfter(self.log.AppendText, f"📦 Режим: CPU (libx264), CBR={target_bitrate}\n")
-                video_encoder_args = [
-                    "-c:v", "libx264",
-                    "-preset", "medium",
-                    *rc_args,
-                    "-profile:v", "high",
-                ]
-
-            cmd = [
-                FFMPEG_PATH,
-                "-hide_banner",
-                "-y",
-                "-i",
-                input_path,
-                "-map",
-                "0:v:0",
-                "-map",
-                f"0:a:{selected_track}",
-                *subtitle_map_args,
-                "-pix_fmt",
-                "yuv420p",
-                "-vf",
-                vf_filter,
-                *video_encoder_args,
-                *audio_codec_args,
-                "-map_metadata",
-                "-1",
-                *subtitle_metadata_args,
-                "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
-                "filter_units=remove_types=6",
-                *subtitle_codec_args,
-                output_path,
+                target_bitrate = f"{int(qp_slider * 1000)}k"
+                rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                wx.CallAfter(self.log.AppendText, f"📦 Режим: NVENC, CBR={target_bitrate}\n")
+            video_encoder_args = [
+                "-c:v", "h264_nvenc",
+                "-preset", "p4",
+                *rc_args,
+                "-profile:v", "high",
+                "-tune", "hq",
+                "-b_ref_mode", "middle",
+                "-spatial_aq", "1",
             ]
         else:
-            wx.CallAfter(self.log.AppendText, "🎥 Видео: copy\n")
-            cmd = [
-                FFMPEG_PATH,
-                "-hide_banner",
-                "-y",
-                "-i",
-                input_path,
-                "-map",
-                "0:v:0",
-                "-map",
-                f"0:a:{selected_track}",
-                *subtitle_map_args,
-                "-c:v",
-                "copy",
-                *audio_codec_args,
-                "-map_metadata",
-                "-1",
-                *subtitle_metadata_args,
-                "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
-                "filter_units=remove_types=6",
-                *subtitle_codec_args,
-                output_path,
+            # Программный фолбэк на CPU, если аппаратный NVENC недоступен.
+            if encode_mode == 0:
+                rc_args = ["-crf", str(qp_slider)]
+                wx.CallAfter(self.log.AppendText, f"🎯 Режим: CPU (libx264), CRF={qp_slider}\n")
+            else:
+                target_bitrate = f"{int(qp_slider * 1000)}k"
+                rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
+                wx.CallAfter(self.log.AppendText, f"📦 Режим: CPU (libx264), CBR={target_bitrate}\n")
+            video_encoder_args = [
+                "-c:v", "libx264",
+                "-preset", "medium",
+                *rc_args,
+                "-profile:v", "high",
             ]
+
+        return ["-pix_fmt", "yuv420p", "-vf", vf_filter, *video_encoder_args]
+
+    def run_ffmpeg_with_progress(
+        self,
+        input_path: str,
+        output_path: str,
+        selected_track: int,
+        bitrate: str,
+        audio_channels: int,
+        selected_subtitles: list[dict],
+        duration: float,
+        gauge: wx.Gauge | None,
+        settings: dict,
+        video_info: dict | None = None,
+    ) -> bool:
+        video_info = video_info or {}
+        eff = self._resolve_effective_settings(settings)
+
+        audio_codec_args = self._build_audio_args(eff["skip_audio"], audio_channels, bitrate)
+        subtitle_map_args, subtitle_codec_args, subtitle_metadata_args = self._build_subtitle_args(selected_subtitles)
+        video_args = self._build_video_args(
+            input_path=input_path,
+            video_info=video_info,
+            skip_video=eff["skip_video"],
+            encode_mode=eff["encode_mode"],
+            qp_slider=eff["qp_slider"],
+            limit_res=eff["limit_res"],
+            tonemap_mode=eff["tonemapping"],
+        )
+
+        cmd = [
+            FFMPEG_PATH,
+            "-hide_banner",
+            "-y",
+            "-i",
+            input_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            f"0:a:{selected_track}",
+            *subtitle_map_args,
+            *video_args,
+            *audio_codec_args,
+            "-map_metadata",
+            "-1",
+            *subtitle_metadata_args,
+            "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
+            "filter_units=remove_types=6",
+            *subtitle_codec_args,
+            output_path,
+        ]
         try:
             self.process = subprocess.Popen(
                 cmd,
