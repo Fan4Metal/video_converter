@@ -897,6 +897,9 @@ CBR — постоянный битрейт видео.
     def add_files(self, paths: list[str]):
         # ffprobe-анализ медленный — выполняем его в фоне, чтобы не блокировать UI.
         # Виджеты строк и лог создаются в UI-потоке через wx.CallAfter.
+        if self.converting:
+            self.log.AppendText("\n⚠ Нельзя добавлять файлы во время конвертации.\n")
+            return
         valid_paths = [p for p in paths if p and os.path.isfile(p)]
         if not valid_paths:
             return
@@ -1804,23 +1807,55 @@ CBR — постоянный битрейт видео.
             self.cancel_conversion()
         self.Destroy()
 
+    def _conversion_locked_controls(self) -> list:
+        """Элементы управления, которые должны блокироваться на время конвертации."""
+        return [
+            self.btn_add,
+            self.btn_remove,
+            self.btn_clear,
+            self.qp_slider,
+            self.encode_mode,
+            self.btn_save_folder_browse,
+            self.btn_clear_save_folder,
+            self.toggle_suffix,
+            self.chk_save_subtitles,
+            self.slider_label,
+            self.chk_limit_res,
+            self.tonemapping_label,
+            self.choice_tonemap,
+            self.chk_skip_video,
+            self.chk_skip_audio,
+            self.chk_copy_tags,
+        ]
+
+    def _set_rows_enabled(self, enabled: bool):
+        """Блокирует/разблокирует виджеты выбора дорожек в строках списка."""
+        for widgets in self.row_widgets.values():
+            for key in ("choice", "subtitles"):
+                ctrl = widgets.get(key)
+                if ctrl:
+                    ctrl.Enable(enabled)
+
     def disable_interface(self):
-        self.btn_add.Disable()
-        self.btn_remove.Disable()
-        self.btn_clear.Disable()
-        self.qp_slider.Disable()
-        self.encode_mode.Disable()
-        self.btn_save_folder_browse.Disable()
-        self.chk_save_subtitles.Disable()
+        for ctrl in self._conversion_locked_controls():
+            ctrl.Disable()
+        self._set_rows_enabled(False)
 
     def enable_interface(self):
-        self.btn_add.Enable()
-        self.btn_remove.Enable()
-        self.btn_clear.Enable()
-        self.qp_slider.Enable()
-        self.encode_mode.Enable()
-        self.btn_save_folder_browse.Enable()
-        self.chk_save_subtitles.Enable()
+        for ctrl in self._conversion_locked_controls():
+            ctrl.Enable()
+        self._set_rows_enabled(True)
+        # Восстанавливаем зависимость: при «не конв. видео» видео-настройки выключены.
+        if self.chk_skip_video.GetValue():
+            for ctrl in (
+                self.chk_limit_res,
+                self.tonemapping_label,
+                self.choice_tonemap,
+                self.slider_label,
+                self.qp_slider,
+                self.encode_mode,
+            ):
+                ctrl.Disable()
 
     def browse_save_folder(self, event):
         with wx.DirDialog(
