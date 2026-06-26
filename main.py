@@ -22,7 +22,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.3.1"
+__VERSION__ = "0.3.2"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -595,6 +595,15 @@ class SubtitleCheckCombo(wx.ComboCtrl):
             return []
         return [i for i in range(checklist.GetCount()) if checklist.IsChecked(i)]
 
+    def SetCheckedItems(self, indexes: list[int]):
+        checklist = self.popup.checklist
+        if not checklist:
+            return
+        wanted = set(indexes)
+        for i in range(checklist.GetCount()):
+            checklist.Check(i, i in wanted)
+        self.update_summary()
+
     def update_summary(self):
         checked = self.GetCheckedItems()
         if not self.choices:
@@ -1162,6 +1171,11 @@ CBR — постоянный битрейт видео.
             play_converted_item.Enable(False)
         menu.AppendSeparator()
 
+        apply_item = menu.Append(wx.ID_ANY, "↪ Применить для других файлов")
+        apply_item.Enable(not self.converting and self.list.GetItemCount() > 1)
+        self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.apply_to_other_files, item), apply_item)
+        menu.AppendSeparator()
+
         if not widgets.get("settings", "").get("global", False):
             reset_convert_settings_item = menu.Append(wx.ID_ANY, "🔄 Сбросить настройки конвертации")
             menu.AppendSeparator()
@@ -1232,6 +1246,50 @@ CBR — постоянный битрейт видео.
                     ],
                 )
                 return
+
+    def apply_to_other_files(self, source_row: int):
+        """
+        Применяет к остальным файлам в списке те же настройки выбора дорожек:
+        - ту же аудио дорожку по её порядковому номеру (если у файла она есть);
+        - если включена опция «сохранить субтитры» — те же субтитры по номеру.
+        """
+        if self.converting:
+            return
+
+        source = self.row_widgets.get(source_row)
+        if not source:
+            return
+
+        source_choice: wx.Choice | None = source.get("choice")
+        audio_index = source_choice.GetSelection() if source_choice else wx.NOT_FOUND
+
+        save_subtitles = self.chk_save_subtitles.GetValue()
+        source_subtitles: SubtitleCheckCombo | None = source.get("subtitles")
+        subtitle_indexes = source_subtitles.GetCheckedItems() if (save_subtitles and source_subtitles) else []
+
+        applied = 0
+        for row, widgets in self.row_widgets.items():
+            if row == source_row:
+                continue
+
+            # Аудио дорожка по номеру
+            choice: wx.Choice | None = widgets.get("choice")
+            if choice and audio_index != wx.NOT_FOUND and audio_index < choice.GetCount():
+                choice.SetSelection(audio_index)
+
+            # Субтитры по номеру
+            if save_subtitles:
+                self.create_subtitle_widget(row)
+                subtitles: SubtitleCheckCombo | None = widgets.get("subtitles")
+                if subtitles:
+                    track_count = len(widgets.get("subtitle_tracks") or [])
+                    subtitles.SetCheckedItems([i for i in subtitle_indexes if i < track_count])
+
+            applied += 1
+
+        self.log.AppendText(
+            f"\n↪ Настройки дорожек применены к остальным файлам ({applied}).\n"
+        )
 
     # --- Rows ---
     def add_row(
