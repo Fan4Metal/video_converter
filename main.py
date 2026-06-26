@@ -9,6 +9,7 @@ import time
 import winreg
 import winsound
 from collections import Counter
+from dataclasses import dataclass
 
 import wx
 from mutagen.mp4 import MP4, MP4StreamInfoError
@@ -595,6 +596,25 @@ class SubtitleCheckCombo(wx.ComboCtrl):
         self.SetValue(text)
 
 
+@dataclass
+class RowSettings:
+    """
+    Настройки кодирования строки.
+
+    is_global=True означает «использовать текущие настройки панели управления»;
+    в этом случае остальные поля игнорируются. Поле quality — значение слайдера:
+    QP (encode_mode=0) или битрейт в Мбит/с (encode_mode=1).
+    """
+
+    is_global: bool = True
+    encode_mode: int = 0
+    quality: int = 22
+    limit_res: bool = False
+    tonemapping: int = 0
+    skip_video: bool = False
+    skip_audio: bool = False
+
+
 # --- Основное окно приложения ---
 class VideoConverter(wx.Frame):
     COL_FILE = 0
@@ -633,7 +653,7 @@ class VideoConverter(wx.Frame):
         self.qp_value = 22
         self.bitrate_value = 8
         self.log_visible = False
-        self.global_settings: dict | None = None
+        self.global_settings: RowSettings | None = None
         self.nvenc_available = True
 
         # layout
@@ -1043,15 +1063,15 @@ CBR — постоянный битрейт видео.
         if mode == 0:
             self.slider_label.SetLabel("Качество, QP:")
             self.qp_slider.SetRange(14, 30)
-            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
-            self.qp_label.SetLabel(f"QP = {self.global_settings.get('qp_slider', 22)}")
-            self.qp_value = self.global_settings.get("qp_slider", 22)
+            self.qp_slider.SetValue(self.global_settings.quality)
+            self.qp_label.SetLabel(f"QP = {self.global_settings.quality}")
+            self.qp_value = self.global_settings.quality
         else:
             self.slider_label.SetLabel("Битрейт (Мбит/с):")
             self.qp_slider.SetRange(2, 25)
-            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 8))
-            self.qp_label.SetLabel(f"Битрейт = {self.global_settings.get('qp_slider', 8)}")
-            self.bitrate_value = self.global_settings.get("qp_slider", 8)
+            self.qp_slider.SetValue(self.global_settings.quality)
+            self.qp_label.SetLabel(f"Битрейт = {self.global_settings.quality}")
+            self.bitrate_value = self.global_settings.quality
 
     def on_toggle_log(self, event):
         if self.log_visible:
@@ -1173,7 +1193,8 @@ CBR — постоянный битрейт видео.
         self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.apply_to_other_files, item), apply_item)
         menu.AppendSeparator()
 
-        if not widgets.get("settings", "").get("global", False):
+        settings_obj = widgets.get("settings")
+        if settings_obj and not settings_obj.is_global:
             reset_convert_settings_item = menu.Append(wx.ID_ANY, "🔄 Сбросить настройки конвертации")
             menu.AppendSeparator()
             self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.reset_convert_settings, e), reset_convert_settings_item)
@@ -1329,15 +1350,7 @@ CBR — постоянный битрейт видео.
             "gauge": gauge,
             "duration": float(duration or 0.0),
             "info": video_info or {},
-            "settings": {
-                "global": True,
-                "encode_mode": "",
-                "qp_slider": "",
-                "limit_res": "",
-                "tonemapping": "",
-                "skip_video": "",
-                "skip_audio": "",
-            },
+            "settings": RowSettings(),
         }
         if self.chk_save_subtitles.GetValue():
             self.create_subtitle_widget(row)
@@ -1485,20 +1498,12 @@ CBR — постоянный битрейт видео.
         return selected
 
     # --- FFmpeg ---
-    def _resolve_effective_settings(self, settings: dict) -> dict:
+    def _resolve_effective_settings(self, settings: RowSettings) -> RowSettings:
         """
         Возвращает действующие настройки кодирования: либо настройки строки
         (если они не «глобальные»), либо текущие значения панели управления.
         """
-        src = settings if not settings.get("global", True) else self.get_current_settings()
-        return {
-            "skip_audio": src.get("skip_audio", False),
-            "skip_video": src.get("skip_video", False),
-            "encode_mode": src.get("encode_mode", 0),
-            "qp_slider": src.get("qp_slider", 22),
-            "limit_res": src.get("limit_res", False),
-            "tonemapping": src.get("tonemapping", 0),
-        }
+        return settings if not settings.is_global else self.get_current_settings()
 
     def _build_audio_args(self, skip_audio: bool, audio_channels: int, bitrate: str) -> list[str]:
         if skip_audio:
@@ -1636,22 +1641,22 @@ CBR — постоянный битрейт видео.
         selected_subtitles: list[dict],
         duration: float,
         gauge: wx.Gauge | None,
-        settings: dict,
+        settings: RowSettings,
         video_info: dict | None = None,
     ) -> bool:
         video_info = video_info or {}
         eff = self._resolve_effective_settings(settings)
 
-        audio_codec_args = self._build_audio_args(eff["skip_audio"], audio_channels, bitrate)
+        audio_codec_args = self._build_audio_args(eff.skip_audio, audio_channels, bitrate)
         subtitle_map_args, subtitle_codec_args, subtitle_metadata_args = self._build_subtitle_args(selected_subtitles)
         video_args = self._build_video_args(
             input_path=input_path,
             video_info=video_info,
-            skip_video=eff["skip_video"],
-            encode_mode=eff["encode_mode"],
-            qp_slider=eff["qp_slider"],
-            limit_res=eff["limit_res"],
-            tonemap_mode=eff["tonemapping"],
+            skip_video=eff.skip_video,
+            encode_mode=eff.encode_mode,
+            qp_slider=eff.quality,
+            limit_res=eff.limit_res,
+            tonemap_mode=eff.tonemapping,
         )
 
         cmd = [
@@ -1869,40 +1874,40 @@ CBR — постоянный битрейт видео.
                 self.save_folder = path
                 save_reg("save_path", path)
 
-    def get_current_settings(self):
-        return {
-            "global": False,
-            "encode_mode": self.encode_mode.GetSelection(),
-            "qp_slider": self.qp_slider.GetValue(),
-            "limit_res": self.chk_limit_res.GetValue(),
-            "tonemapping": self.choice_tonemap.GetSelection(),
-            "skip_video": self.chk_skip_video.GetValue(),
-            "skip_audio": self.chk_skip_audio.GetValue(),
-        }
+    def get_current_settings(self) -> RowSettings:
+        return RowSettings(
+            is_global=False,
+            encode_mode=self.encode_mode.GetSelection(),
+            quality=self.qp_slider.GetValue(),
+            limit_res=self.chk_limit_res.GetValue(),
+            tonemapping=self.choice_tonemap.GetSelection(),
+            skip_video=self.chk_skip_video.GetValue(),
+            skip_audio=self.chk_skip_audio.GetValue(),
+        )
 
     def reset_global_settings(self):
         if self.global_settings:
-            self.encode_mode.SetSelection(self.global_settings.get("encode_mode", 0))
-            self.qp_slider.SetValue(self.global_settings.get("qp_slider", 22))
+            self.encode_mode.SetSelection(self.global_settings.encode_mode)
+            self.qp_slider.SetValue(self.global_settings.quality)
             self.on_mode_and_qp_reset()
-            self.chk_limit_res.SetValue(self.global_settings.get("limit_res", False))
-            self.choice_tonemap.SetSelection(self.global_settings.get("tonemapping", 0))
-            self.chk_skip_video.SetValue(self.global_settings.get("skip_video", False))
-            if self.global_settings.get("skip_video", False):
+            self.chk_limit_res.SetValue(self.global_settings.limit_res)
+            self.choice_tonemap.SetSelection(self.global_settings.tonemapping)
+            self.chk_skip_video.SetValue(self.global_settings.skip_video)
+            if self.global_settings.skip_video:
                 self.on_skip_video(None)
-            self.chk_skip_audio.SetValue(self.global_settings.get("skip_audio", False))
+            self.chk_skip_audio.SetValue(self.global_settings.skip_audio)
 
-    def get_row_settings_string(self, row: int, settings: dict):
-        if settings.get("skip_video", False):
+    def get_row_settings_string(self, row: int, settings: RowSettings):
+        if settings.skip_video:
             video_str = "В: не конв."
         else:
-            if settings.get("encode_mode", 0) == 0:
-                video_str = f"QP={settings.get('qp_slider', 22)}"
+            if settings.encode_mode == 0:
+                video_str = f"QP={settings.quality}"
             else:
-                video_str = f"CBR={settings.get('qp_slider', 8)}"
-            if settings.get("limit_res", False):
+                video_str = f"CBR={settings.quality}"
+            if settings.limit_res:
                 video_str += ", fullHD"
-            tm_string = settings.get("tonemapping", 0)
+            tm_string = settings.tonemapping
             if tm_string == 2:
                 video_str += ", TM=выкл"
             elif tm_string == 1:
@@ -1910,7 +1915,7 @@ CBR — постоянный битрейт видео.
             elif tm_string == 0:
                 video_str += ", TM=auto"
 
-        if settings.get("skip_audio", False):
+        if settings.skip_audio:
             audio_str = ", А: не конв."
         else:
             audio_str = ""
@@ -1946,15 +1951,7 @@ CBR — постоянный битрейт видео.
         item_index = self.list.GetFirstSelected()
         if item_index == -1:
             return
-        self.row_widgets[item_index]["settings"] = {
-            "global": True,
-            "encode_mode": "",
-            "qp_slider": "",
-            "limit_res": "",
-            "tonemapping": "",
-            "skip_video": "",
-            "skip_audio": "",
-        }
+        self.row_widgets[item_index]["settings"] = RowSettings()
         self.list.SetStringItem(item_index, self.COL_SETTINGS, "⚙️Глобальные")
         self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 255, 255))
         self.list.Refresh()
