@@ -23,7 +23,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.3.2"
+__VERSION__ = "0.3.2 test"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -642,7 +642,12 @@ class VideoConverter(wx.Frame):
         panel.SetDropTarget(FileDropTarget(self))
 
         # состояние
+        # row_widgets ключуется стабильным uid (не индексом строки).
+        # row_order хранит uid в порядке отображения списка — это источник
+        # правды для соответствия «индекс строки -> uid».
         self.row_widgets: dict[int, dict] = {}
+        self.row_order: list[int] = []
+        self._next_row_uid = 0
         self.converting = False
         self.process: subprocess.Popen | None = None
         self.cancel_event = threading.Event()
@@ -969,6 +974,12 @@ CBR — постоянный битрейт видео.
             video_info=info,
         )
 
+    def _widgets_at(self, row: int) -> dict | None:
+        """Виджеты строки по индексу отображения (через стабильный uid из row_order)."""
+        if row is None or row < 0 or row >= len(self.row_order):
+            return None
+        return self.row_widgets.get(self.row_order[row])
+
     def on_remove_selected(self, event):
         if self.converting:
             wx.MessageBox("Нельзя удалять строки во время конвертации.", "Внимание", wx.OK | wx.ICON_WARNING)
@@ -986,8 +997,7 @@ CBR — постоянный битрейт видео.
             return
 
         # уничтожаем виджеты
-        for row in list(self.row_widgets.keys()):
-            w = self.row_widgets[row]
+        for w in self.row_widgets.values():
             for key in ("choice", "subtitles", "gauge"):
                 try:
                     ctrl = w.get(key)
@@ -998,38 +1008,57 @@ CBR — постоянный битрейт видео.
 
         self.list.DeleteAllItems()
         self.row_widgets.clear()
+        self.row_order.clear()
         self.log.AppendText("\n🧹 Список очищен.\n")
 
     def delete_row(self, row: int):
-        w = self.row_widgets.get(row)
+        if row < 0 or row >= len(self.row_order):
+            return
+        uid = self.row_order[row]
+        w = self.row_widgets.get(uid)
         if w:
-            try:
-                if w.get("choice"):
-                    w["choice"].Destroy()
-            except Exception:
-                pass
-            try:
-                if w.get("subtitles"):
-                    w["subtitles"].Destroy()
-            except Exception:
-                pass
-            try:
-                if w.get("gauge"):
-                    w["gauge"].Destroy()
-            except Exception:
-                pass
+            for key in ("choice", "subtitles", "gauge"):
+                try:
+                    if w.get(key):
+                        w[key].Destroy()
+                except Exception:
+                    pass
 
         self.list.DeleteItem(row)
+        self.row_order.pop(row)
+        self.row_widgets.pop(uid, None)
+        self._reindex_item_windows()
 
-        # пересобираем row_widgets с новыми индексами
-        new_map: dict[int, dict] = {}
-        for i in range(self.list.GetItemCount()):
-            # после DeleteItem виджеты “остаются” в контроле, мы их держим в старых dict — надо сдвинуть
-            if i < row:
-                new_map[i] = self.row_widgets[i]
-            else:
-                new_map[i] = self.row_widgets[i + 1]
-        self.row_widgets = new_map
+    def _reindex_item_windows(self):
+        """
+        После DeleteItem UltimateListCtrl не пересчитывает _itemId у встроенных
+        виджетов оставшихся строк. Из-за этого у сдвинувшихся строк остаётся
+        устаревший _itemId (у последней — равный GetItemCount()), и при получении
+        фокуса (например, открытии выпадающего списка аудио) OnSetFocus падает
+        с «invalid item index in GetItemState».
+
+        Чиним точечно: сопоставляем каждый встроенный виджет с его текущим
+        индексом строки и обновляем _itemId у соответствующих элементов ULC.
+        """
+        try:
+            items_with_window = self.list._mainWin._itemWithWindow
+        except AttributeError:
+            return
+
+        widget_to_row: dict[int, int] = {}
+        for row in range(self.list.GetItemCount()):
+            widgets = self._widgets_at(row)
+            if not widgets:
+                continue
+            for key in ("choice", "subtitles", "gauge"):
+                ctrl = widgets.get(key)
+                if ctrl is not None:
+                    widget_to_row[id(ctrl)] = row
+
+        for item in items_with_window:
+            wnd = getattr(item, "_wnd", None)
+            if wnd is not None and id(wnd) in widget_to_row:
+                item._itemId = widget_to_row[id(wnd)]
 
     def on_mode_change(self, event):
         mode = self.encode_mode.GetSelection()
@@ -1105,7 +1134,7 @@ CBR — постоянный битрейт видео.
     def on_save_subtitles(self, event):
         enabled = self.chk_save_subtitles.GetValue()
         if enabled:
-            for row in self.row_widgets:
+            for row in range(self.list.GetItemCount()):
                 self.create_subtitle_widget(row)
         else:
             for widgets in self.row_widgets.values():
@@ -1146,7 +1175,9 @@ CBR — постоянный битрейт видео.
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self.row_widgets.get(row)
+        widgets = self._widgets_at(row)
+        if not widgets:
+            return
         path = widgets.get("path")
         if os.path.isfile(path):
             audio_stream_num = widgets.get("choice").GetSelection() + 1
@@ -1173,8 +1204,16 @@ CBR — постоянный битрейт видео.
         if item == wx.NOT_FOUND or item == -1:
             return
 
-        # Выделяем строку, если она не выделена
+        # Если кликнутая строка ещё не выделена — снимаем выделение с остальных
+        # и выделяем только её (иначе остаётся несколько выделенных строк).
         if not self.list.IsSelected(item):
+            selected = []
+            s = self.list.GetFirstSelected()
+            while s != -1:
+                selected.append(s)
+                s = self.list.GetNextSelected(s)
+            for s in selected:
+                self.list.Select(s, False)
             self.list.Select(item)
 
         # Создаем контекстное меню
@@ -1183,7 +1222,10 @@ CBR — постоянный битрейт видео.
         # Пункты меню
         play_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести")
         play_converted_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести сконвертированный файл")
-        widgets = self.row_widgets.get(item)
+        widgets = self._widgets_at(item)
+        if not widgets:
+            menu.Destroy()
+            return
         if self.list.GetItem(item, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
             play_converted_item.Enable()
         else:
@@ -1231,7 +1273,7 @@ CBR — постоянный битрейт видео.
         if row == -1:
             return
 
-        widgets = self.row_widgets.get(row)
+        widgets = self._widgets_at(row)
         if not widgets:
             return
 
@@ -1244,7 +1286,9 @@ CBR — постоянный битрейт видео.
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self.row_widgets.get(row)
+        widgets = self._widgets_at(row)
+        if not widgets:
+            return
         path = widgets.get("output_file", "")
         if path and os.path.isfile(path):
             subprocess.Popen(f'explorer /select,"{path}"')
@@ -1253,7 +1297,9 @@ CBR — постоянный битрейт видео.
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self.row_widgets.get(row)
+        widgets = self._widgets_at(row)
+        if not widgets:
+            return
         if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
             output_file = widgets.get("output_file")
             if os.path.isfile(output_file):
@@ -1276,7 +1322,7 @@ CBR — постоянный битрейт видео.
         if self.converting:
             return
 
-        source = self.row_widgets.get(source_row)
+        source = self._widgets_at(source_row)
         if not source:
             return
 
@@ -1288,8 +1334,11 @@ CBR — постоянный битрейт видео.
         subtitle_indexes = source_subtitles.GetCheckedItems() if (save_subtitles and source_subtitles) else []
 
         applied = 0
-        for row, widgets in self.row_widgets.items():
+        for row in range(self.list.GetItemCount()):
             if row == source_row:
+                continue
+            widgets = self._widgets_at(row)
+            if not widgets:
                 continue
 
             # Аудио дорожка по номеру
@@ -1344,7 +1393,10 @@ CBR — постоянный битрейт видео.
         gauge.SetValue(0)
         self.list.SetItemWindow(row, self.COL_PROGRESS, gauge, expand=True)
 
-        self.row_widgets[row] = {
+        uid = self._next_row_uid
+        self._next_row_uid += 1
+        self.row_order.append(uid)
+        self.row_widgets[uid] = {
             "path": path,
             "choice": choice,
             "subtitles": None,
@@ -1358,7 +1410,7 @@ CBR — постоянный битрейт видео.
             self.create_subtitle_widget(row)
 
     def create_subtitle_widget(self, row: int):
-        widgets = self.row_widgets.get(row)
+        widgets = self._widgets_at(row)
         if not widgets or widgets.get("subtitles"):
             return
         subtitle_choices = [track["display"] for track in widgets.get("subtitle_tracks", [])]
@@ -1376,7 +1428,7 @@ CBR — постоянный битрейт видео.
             self.log.AppendText("\n⚠ Нет файлов в очереди.\n")
             return
 
-        self.all_jobs_duration = sum(float(self.row_widgets[r].get("duration") or 0.0) for r in self.row_widgets)
+        self.all_jobs_duration = sum(float(w.get("duration") or 0.0) for w in self.row_widgets.values())
         self.done_duration = 0.0
         self.cancel_event.clear()
         self.converting = True
@@ -1394,11 +1446,15 @@ CBR — постоянный битрейт видео.
     def queue_worker(self):
         self.current_output_file = None
         try:
-            for row in sorted(self.row_widgets.keys()):
+            # Снимок порядка строк (uid) на момент старта; во время конвертации
+            # добавление/удаление строк заблокировано, поэтому индексы стабильны.
+            for row, uid in enumerate(list(self.row_order)):
                 if self.cancel_event.is_set():
                     break
 
-                widgets = self.row_widgets[row]
+                widgets = self.row_widgets.get(uid)
+                if not widgets:
+                    continue
                 path = widgets.get("path")
                 duration = float(widgets.get("duration") or 0.0)
                 gauge: wx.Gauge | None = widgets.get("gauge")
@@ -1428,7 +1484,7 @@ CBR — постоянный битрейт видео.
                 wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
 
-                settings = self.row_widgets[row]["settings"]
+                settings = widgets["settings"]
 
                 ok = self.run_ffmpeg_with_progress(
                     input_path=path,
@@ -1930,7 +1986,9 @@ CBR — постоянный битрейт видео.
         item_index = self.list.GetFirstSelected()
         while item_index != -1:
             settings = self.get_current_settings()
-            self.row_widgets[item_index]["settings"] = settings
+            widgets = self._widgets_at(item_index)
+            if widgets:
+                widgets["settings"] = settings
             self.list.SetStringItem(item_index, self.COL_SETTINGS, self.get_row_settings_string(item_index, settings))
             self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 251, 235))
             self.list.Refresh()
@@ -1956,7 +2014,10 @@ CBR — постоянный битрейт видео.
         item_index = self.list.GetFirstSelected()
         if item_index == -1:
             return
-        self.row_widgets[item_index]["settings"] = RowSettings()
+        widgets = self._widgets_at(item_index)
+        if not widgets:
+            return
+        widgets["settings"] = RowSettings()
         self.list.SetStringItem(item_index, self.COL_SETTINGS, "⚙️Глобальные")
         self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 255, 255))
         self.list.Refresh()
