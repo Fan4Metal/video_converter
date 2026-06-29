@@ -23,7 +23,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.3.2 test"
+__VERSION__ = "0.3.3"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -630,6 +630,20 @@ class VideoConverter(wx.Frame):
     COL_STATUS = 8
     COL_PROGRESS = 9
 
+    # Базовые заголовки столбцов (без стрелки сортировки)
+    COL_LABELS = {
+        COL_FILE: "Файл",
+        COL_RES: "Разрешение",
+        COL_BR: "Битрейт",
+        COL_SIZE: "Размер",
+        COL_TIME: "Длительность",
+        COL_AUDIO: "Аудио дорожка",
+        COL_SUBTITLES: "Субтитры",
+        COL_SETTINGS: "Параметры",
+        COL_STATUS: "Статус",
+        COL_PROGRESS: "Прогресс",
+    }
+
     def __init__(self):
         super().__init__(
             None,
@@ -648,6 +662,9 @@ class VideoConverter(wx.Frame):
         self.row_widgets: dict[int, dict] = {}
         self.row_order: list[int] = []
         self._next_row_uid = 0
+        # Состояние сортировки по клику на заголовок столбца
+        self._sort_col: int | None = None
+        self._sort_ascending = True
         self.converting = False
         self.process: subprocess.Popen | None = None
         self.cancel_event = threading.Event()
@@ -719,19 +736,20 @@ class VideoConverter(wx.Frame):
             ),
         )
 
-        self.list.InsertColumn(self.COL_FILE, "Файл", width=self.FromDIP(360))
-        self.list.InsertColumn(self.COL_RES, "Разрешение", width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_BR, "Битрейт", width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_SIZE, "Размер", width=self.FromDIP(100))
-        self.list.InsertColumn(self.COL_TIME, "Длительность", width=self.FromDIP(100))
-        self.list.InsertColumn(self.COL_AUDIO, "Аудио дорожка", width=self.FromDIP(280))
-        self.list.InsertColumn(self.COL_SUBTITLES, "Субтитры", width=self.FromDIP(240))
-        self.list.InsertColumn(self.COL_SETTINGS, "Параметры", width=self.FromDIP(170))
-        self.list.InsertColumn(self.COL_STATUS, "Статус", width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_PROGRESS, "Прогресс", width=self.FromDIP(160))
+        self.list.InsertColumn(self.COL_FILE, self.COL_LABELS[self.COL_FILE], width=self.FromDIP(360))
+        self.list.InsertColumn(self.COL_RES, self.COL_LABELS[self.COL_RES], width=self.FromDIP(110))
+        self.list.InsertColumn(self.COL_BR, self.COL_LABELS[self.COL_BR], width=self.FromDIP(110))
+        self.list.InsertColumn(self.COL_SIZE, self.COL_LABELS[self.COL_SIZE], width=self.FromDIP(100))
+        self.list.InsertColumn(self.COL_TIME, self.COL_LABELS[self.COL_TIME], width=self.FromDIP(100))
+        self.list.InsertColumn(self.COL_AUDIO, self.COL_LABELS[self.COL_AUDIO], width=self.FromDIP(280))
+        self.list.InsertColumn(self.COL_SUBTITLES, self.COL_LABELS[self.COL_SUBTITLES], width=self.FromDIP(240))
+        self.list.InsertColumn(self.COL_SETTINGS, self.COL_LABELS[self.COL_SETTINGS], width=self.FromDIP(170))
+        self.list.InsertColumn(self.COL_STATUS, self.COL_LABELS[self.COL_STATUS], width=self.FromDIP(110))
+        self.list.InsertColumn(self.COL_PROGRESS, self.COL_LABELS[self.COL_PROGRESS], width=self.FromDIP(160))
         self.list.SetColumnShown(self.COL_SUBTITLES, False)
 
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
+        self.list.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_select)
         self.list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.on_right_click)
@@ -1356,9 +1374,170 @@ CBR — постоянный битрейт видео.
 
             applied += 1
 
-        self.log.AppendText(
-            f"\n↪ Настройки дорожек применены к остальным файлам ({applied}).\n"
-        )
+        self.log.AppendText(f"\n↪ Настройки дорожек применены к остальным файлам ({applied}).\n")
+
+    # --- Сортировка по заголовку столбца ---
+    def on_col_click(self, event):
+        col = event.GetColumn()
+        if col is None or col < 0:
+            return
+        if col in (self.COL_SETTINGS, self.COL_PROGRESS):
+            return
+        if self.converting:
+            return
+        if self.list.GetItemCount() < 2:
+            return
+
+        # Повторный клик по тому же столбцу меняет направление сортировки.
+        if self._sort_col == col:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_col = col
+            self._sort_ascending = True
+
+        self.sort_rows(col, self._sort_ascending)
+        self._update_sort_indicator()
+
+    @staticmethod
+    def _to_number(text, default=0.0) -> float:
+        """Извлекает первое число из строки (для сортировки числовых столбцов)."""
+        m = re.search(r"-?\d+(?:[.,]\d+)?", str(text))
+        if not m:
+            return default
+        try:
+            return float(m.group(0).replace(",", "."))
+        except ValueError:
+            return default
+
+    def _row_sort_key(self, s: dict, col: int):
+        """Ключ сортировки для снимка строки по выбранному столбцу."""
+        info = s.get("info") or {}
+        if col == self.COL_RES:
+            return self._to_number(info.get("width"), 0) * self._to_number(info.get("height"), 0)
+        if col == self.COL_BR:
+            return self._to_number(info.get("bitrate"), 0)
+        if col == self.COL_SIZE:
+            return float(info.get("size") or 0)
+        if col == self.COL_TIME:
+            return float(s.get("duration") or 0.0)
+        if col == self.COL_SUBTITLES:
+            return float(len(s.get("subtitle_tracks") or []))
+        if col == self.COL_AUDIO:
+            sel = s.get("audio_sel", wx.NOT_FOUND)
+            choices = s.get("audio_choices") or []
+            return (choices[sel] if 0 <= sel < len(choices) else "").lower()
+        if col == self.COL_STATUS:
+            return s.get("col_status", "").lower()
+        # COL_FILE и всё остальное — по имени файла
+        return os.path.basename(s.get("path") or "").lower()
+
+    def sort_rows(self, col: int, ascending: bool):
+        snaps = [self._snapshot_row(r) for r in range(self.list.GetItemCount())]
+        snaps.sort(key=lambda s: self._row_sort_key(s, col), reverse=not ascending)
+        self._rebuild_rows(snaps)
+
+    def _snapshot_row(self, row: int) -> dict:
+        """Полный снимок строки: текстовые столбцы + состояние виджетов."""
+        uid = self.row_order[row]
+        w = self.row_widgets[uid]
+        choice: wx.Choice | None = w.get("choice")
+        subtitles = w.get("subtitles")
+        gauge: wx.Gauge | None = w.get("gauge")
+        # Прочие ключи (например, output_file), добавленные после конвертации.
+        extra = {k: v for k, v in w.items() if k not in ("path", "choice", "subtitles", "subtitle_tracks", "gauge", "duration", "info", "settings")}
+        return {
+            "uid": uid,
+            "path": w.get("path"),
+            "info": w.get("info"),
+            "duration": w.get("duration"),
+            "settings": w.get("settings"),
+            "subtitle_tracks": w.get("subtitle_tracks"),
+            "audio_choices": [choice.GetString(i) for i in range(choice.GetCount())] if choice else [],
+            "audio_sel": choice.GetSelection() if choice else wx.NOT_FOUND,
+            "has_subtitle_widget": subtitles is not None,
+            "subtitle_checked": subtitles.GetCheckedItems() if subtitles else None,
+            "gauge_value": gauge.GetValue() if gauge else 0,
+            "extra": extra,
+            "col_file": self.list.GetItem(row, self.COL_FILE).GetText(),
+            "col_res": self.list.GetItem(row, self.COL_RES).GetText(),
+            "col_br": self.list.GetItem(row, self.COL_BR).GetText(),
+            "col_size": self.list.GetItem(row, self.COL_SIZE).GetText(),
+            "col_time": self.list.GetItem(row, self.COL_TIME).GetText(),
+            "col_status": self.list.GetItem(row, self.COL_STATUS).GetText(),
+            "col_settings": self.list.GetItem(row, self.COL_SETTINGS).GetText(),
+        }
+
+    def _rebuild_rows(self, snaps: list[dict]):
+        """Перестраивает список в порядке snaps, пересоздавая встроенные виджеты."""
+        # Уничтожаем старые виджеты
+        for w in self.row_widgets.values():
+            for key in ("choice", "subtitles", "gauge"):
+                try:
+                    ctrl = w.get(key)
+                    if ctrl:
+                        ctrl.Destroy()
+                except Exception:
+                    pass
+
+        self.list.DeleteAllItems()
+        self.row_widgets.clear()
+        self.row_order.clear()
+
+        for s in snaps:
+            row = self.list.GetItemCount()
+            self.list.InsertStringItem(row, s["col_file"])
+            self.list.SetStringItem(row, self.COL_RES, s["col_res"])
+            self.list.SetStringItem(row, self.COL_BR, s["col_br"])
+            self.list.SetStringItem(row, self.COL_TIME, s["col_time"])
+            self.list.SetStringItem(row, self.COL_SIZE, s["col_size"])
+            self.list.SetStringItem(row, self.COL_STATUS, s["col_status"])
+            self.list.SetStringItem(row, self.COL_SETTINGS, s["col_settings"])
+
+            choice = wx.Choice(self.list, choices=s["audio_choices"])
+            sel = s["audio_sel"]
+            if sel != wx.NOT_FOUND and 0 <= sel < choice.GetCount():
+                choice.SetSelection(sel)
+            self.list.SetItemWindow(row, self.COL_AUDIO, choice, expand=True)
+
+            gauge = wx.Gauge(self.list, range=100, size=self.FromDIP(wx.Size(-1, 18)), style=wx.GA_HORIZONTAL)
+            gauge.SetValue(int(s["gauge_value"] or 0))
+            self.list.SetItemWindow(row, self.COL_PROGRESS, gauge, expand=True)
+
+            uid = s["uid"]
+            self.row_order.append(uid)
+            self.row_widgets[uid] = {
+                "path": s["path"],
+                "choice": choice,
+                "subtitles": None,
+                "subtitle_tracks": s["subtitle_tracks"],
+                "gauge": gauge,
+                "duration": s["duration"],
+                "info": s["info"],
+                "settings": s["settings"],
+                **(s.get("extra") or {}),
+            }
+            if s["has_subtitle_widget"]:
+                self.create_subtitle_widget(row)
+                sub = self.row_widgets[uid].get("subtitles")
+                if sub is not None and s["subtitle_checked"] is not None:
+                    sub.SetCheckedItems(s["subtitle_checked"])
+
+        self._reindex_item_windows()
+
+    def _update_sort_indicator(self):
+        """Обновляет заголовки столбцов: добавляет стрелку у активного столбца."""
+        for col, label in self.COL_LABELS.items():
+            if not self.list.IsColumnShown(col):
+                continue
+            arrow = ""
+            if col == self._sort_col:
+                arrow = "  ▲" if self._sort_ascending else "  ▼"
+            width = self.list.GetColumnWidth(col)
+            ci = self.list.GetColumn(col)
+            ci.SetText(label + arrow)
+            self.list.SetColumn(col, ci)
+            # SetColumn может сбросить ширину — восстанавливаем её.
+            self.list.SetColumnWidth(col, width)
 
     # --- Rows ---
     def add_row(
@@ -1666,13 +1845,19 @@ CBR — постоянный битрейт видео.
                 rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
                 wx.CallAfter(self.log.AppendText, f"📦 Режим: NVENC, CBR={target_bitrate}\n")
             video_encoder_args = [
-                "-c:v", "h264_nvenc",
-                "-preset", "p4",
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
                 *rc_args,
-                "-profile:v", "high",
-                "-tune", "hq",
-                "-b_ref_mode", "middle",
-                "-spatial_aq", "1",
+                "-profile:v",
+                "high",
+                "-tune",
+                "hq",
+                "-b_ref_mode",
+                "middle",
+                "-spatial_aq",
+                "1",
             ]
         else:
             # Программный фолбэк на CPU, если аппаратный NVENC недоступен.
@@ -1684,10 +1869,13 @@ CBR — постоянный битрейт видео.
                 rc_args = ["-b:v", target_bitrate, "-maxrate", target_bitrate, "-bufsize", "2M"]
                 wx.CallAfter(self.log.AppendText, f"📦 Режим: CPU (libx264), CBR={target_bitrate}\n")
             video_encoder_args = [
-                "-c:v", "libx264",
-                "-preset", "medium",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
                 *rc_args,
-                "-profile:v", "high",
+                "-profile:v",
+                "high",
             ]
 
         return ["-pix_fmt", "yuv420p", "-vf", vf_filter, *video_encoder_args]
