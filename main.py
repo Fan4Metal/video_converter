@@ -1210,6 +1210,7 @@ CBR — постоянный битрейт видео.
                         "каналов: ${current-tracks/audio/audio-channels:?}, кодек: ${current-tracks/audio/codec}"
                     ),
                     "--no-sub",
+                    "--no-config",
                 ],
             )
 
@@ -1327,6 +1328,7 @@ CBR — постоянный битрейт видео.
                         output_file,
                         "--title=Сконвертированный файл: ${filename}",
                         "--no-sub",
+                        "--no-config",
                     ],
                 )
                 return
