@@ -784,6 +784,24 @@ class VideoConverter(wx.Frame):
         COL_PROGRESS: "Прогресс",
     }
 
+    # Ширины столбцов по умолчанию в DIP. Столбец прогресса растягивается на остаток.
+    COL_DEFAULT_WIDTHS = {
+        COL_FILE: 360,
+        COL_RES: 92,
+        COL_BR: 85,
+        COL_SIZE: 65,
+        COL_EST: 101,
+        COL_TIME: 100,
+        COL_AUDIO: 280,
+        COL_SUBTITLES: 240,
+        COL_SETTINGS: 170,
+        COL_STATUS: 110,
+        COL_PROGRESS: 128,
+    }
+    # Запас к ширине заголовка и минимальная ширина растягиваемого столбца прогресса (DIP).
+    COL_HEADER_PADDING = 6
+    COL_PROGRESS_MIN = 90
+
     def __init__(self):
         super().__init__(
             None,
@@ -876,19 +894,11 @@ class VideoConverter(wx.Frame):
             ),
         )
 
-        self.list.InsertColumn(self.COL_FILE, self.COL_LABELS[self.COL_FILE], width=self.FromDIP(360))
-        self.list.InsertColumn(self.COL_RES, self.COL_LABELS[self.COL_RES], width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_BR, self.COL_LABELS[self.COL_BR], width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_SIZE, self.COL_LABELS[self.COL_SIZE], width=self.FromDIP(100))
-        self.list.InsertColumn(self.COL_EST, self.COL_LABELS[self.COL_EST], width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_TIME, self.COL_LABELS[self.COL_TIME], width=self.FromDIP(100))
-        self.list.InsertColumn(self.COL_AUDIO, self.COL_LABELS[self.COL_AUDIO], width=self.FromDIP(280))
-        self.list.InsertColumn(self.COL_SUBTITLES, self.COL_LABELS[self.COL_SUBTITLES], width=self.FromDIP(240))
-        self.list.InsertColumn(self.COL_SETTINGS, self.COL_LABELS[self.COL_SETTINGS], width=self.FromDIP(170))
-        self.list.InsertColumn(self.COL_STATUS, self.COL_LABELS[self.COL_STATUS], width=self.FromDIP(110))
-        self.list.InsertColumn(self.COL_PROGRESS, self.COL_LABELS[self.COL_PROGRESS], width=self.FromDIP(160))
+        for col in sorted(self.COL_DEFAULT_WIDTHS):
+            self.list.InsertColumn(col, self.COL_LABELS[col], width=self._column_width(col))
         self.list.SetColumnShown(self.COL_SUBTITLES, False)
 
+        self.list.Bind(wx.EVT_SIZE, self.on_list_size)
         self.list.Bind(wx.EVT_KEY_DOWN, self.on_key_down)
         self.list.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_play_file)
@@ -1171,6 +1181,7 @@ CBR — постоянный битрейт видео.
         self.list.DeleteAllItems()
         self.row_widgets.clear()
         self.row_order.clear()
+        self._schedule_progress_fit()
         self.log.AppendText("\n🧹 Список очищен.\n")
 
     def delete_row(self, row: int):
@@ -1190,6 +1201,46 @@ CBR — постоянный битрейт видео.
         self.row_order.pop(row)
         self.row_widgets.pop(uid, None)
         self._reindex_item_windows()
+        self._schedule_progress_fit()
+
+    def _column_width(self, col: int) -> int:
+        """Ширина столбца: не меньше заданной по умолчанию и не меньше заголовка со стрелкой сортировки."""
+        header = wx.ClientDC(self.list).GetTextExtent(self.COL_LABELS[col] + "  ▲").width
+        return max(self.FromDIP(self.COL_DEFAULT_WIDTHS[col]), header + self.FromDIP(self.COL_HEADER_PADDING))
+
+    def on_list_size(self, event):
+        event.Skip()
+        self._schedule_progress_fit()
+
+    def _schedule_progress_fit(self):
+        """Пересчёт ширины столбца прогресса после того, как список закончит раскладку."""
+        wx.CallAfter(self._fit_progress_column)
+
+    def _fit_progress_column(self):
+        """
+        Растягивает последний столбец на свободное место, чтобы не появлялась
+        горизонтальная прокрутка. Ширины остальных столбцов заданы в DIP, но
+        системный шрифт и полоса прокрутки на разных машинах занимают разное
+        место, поэтому остаток считаем во время работы, а не на глаз.
+        """
+        try:
+            try:
+                available = self.list._mainWin.GetClientSize().width
+            except AttributeError:
+                available = self.list.GetClientSize().width - wx.SystemSettings.GetMetric(wx.SYS_VSCROLL_X)
+            if available <= 0:
+                return
+
+            others = sum(
+                self.list.GetColumnWidth(col)
+                for col in range(self.list.GetColumnCount())
+                if col != self.COL_PROGRESS and self.list.IsColumnShown(col)
+            )
+            width = max(available - others, self.FromDIP(self.COL_PROGRESS_MIN))
+            if width != self.list.GetColumnWidth(self.COL_PROGRESS):
+                self.list.SetColumnWidth(self.COL_PROGRESS, width)
+        except RuntimeError:
+            return  # окно уже уничтожено
 
     def _reindex_item_windows(self):
         """
@@ -1309,6 +1360,7 @@ CBR — постоянный битрейт видео.
                 widgets["subtitles"] = None
 
         self.list.SetColumnShown(self.COL_SUBTITLES, enabled)
+        self._schedule_progress_fit()
         self.Layout()
 
     def on_skip_video(self, event):
@@ -1675,6 +1727,7 @@ CBR — постоянный битрейт видео.
                     sub.SetCheckedItems(s["subtitle_checked"])
 
         self._reindex_item_windows()
+        self._schedule_progress_fit()
 
     def _update_sort_indicator(self):
         """Обновляет заголовки столбцов: добавляет стрелку у активного столбца."""
@@ -1790,6 +1843,8 @@ CBR — постоянный битрейт видео.
             "settings": RowSettings(),
         }
         self.update_row_estimate(row)
+        # Появившаяся вертикальная полоса прокрутки сужает список.
+        self._schedule_progress_fit()
         if self.chk_save_subtitles.GetValue():
             self.create_subtitle_widget(row)
 
