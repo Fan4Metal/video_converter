@@ -157,6 +157,14 @@ def format_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def to_int(value, default: int = 0) -> int:
+    """Безопасное приведение к int (ffprobe часто отдаёт числа строками или None)."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def human_size(num_bytes: int) -> str:
     try:
         num = float(num_bytes)
@@ -170,16 +178,135 @@ def human_size(num_bytes: int) -> str:
 
 
 # --- Определение битрейта по количеству каналов ---
+def get_audio_bitrate_kbps(channels: int) -> int:
+    """Битрейт AAC-дорожки в кбит/с по количеству каналов."""
+    ch = to_int(channels, 2)
+    if ch <= 1:
+        return 128
+    if ch == 2:
+        return 192
+    if ch <= 6:
+        return 384
+    if ch >= 8:
+        return 512
+    return 256
+
+
 def get_audio_bitrate(channels: int) -> str:
-    if channels <= 1:
-        return "128k"
-    if channels == 2:
-        return "192k"
-    if channels <= 6:
-        return "384k"
-    if channels >= 8:
-        return "512k"
-    return "256k"
+    return f"{get_audio_bitrate_kbps(channels)}k"
+
+
+# --- Прогноз размера выходного файла ---
+# Бит на пиксель для H.264 при QP=22 (эмпирическая константа для грубой оценки).
+EST_BITS_PER_PIXEL_QP22 = 0.09
+# Шаг QP, при котором битрейт меняется вдвое.
+EST_QP_HALVING_STEP = 6.0
+# NVENC при том же значении качества даёт примерно вдвое больший битрейт, чем libx264.
+EST_NVENC_BITRATE_FACTOR = 1.9
+# Накладные расходы контейнера MP4.
+EST_CONTAINER_OVERHEAD = 1.01
+# Страховка от абсурдных значений: битрейт источника — единственный доступный
+# признак сложности картинки, сильно превысить его перекодирование не должно.
+EST_SOURCE_BITRATE_CAP = 2.5
+
+
+def source_video_bitrate_bps(info: dict) -> int:
+    """
+    Битрейт видеопотока источника в бит/с. Если ffprobe не отдал его напрямую
+    (типично для MKV), вычитаем аудио из общего битрейта контейнера, а в крайнем
+    случае считаем общий битрейт из размера файла и длительности.
+    """
+    own = to_int(info.get("video_bitrate_bps"))
+    if own > 0:
+        return own
+
+    audio_total = sum(to_int(a.get("bit_rate")) for a in (info.get("audio_streams") or []))
+
+    total = to_int(info.get("format_bitrate_bps"))
+    if total <= 0:
+        duration = float(info.get("duration") or 0.0)
+        size = to_int(info.get("size"))
+        if duration > 0 and size > 0:
+            total = int(size * 8 / duration)
+
+    return max(total - audio_total, 0)
+
+
+def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: bool = False) -> int:
+    """
+    Грубая оценка битрейта видео в режиме постоянного качества: модель «бит на
+    пиксель» с удвоением/делением пополам каждые EST_QP_HALVING_STEP единиц QP.
+    Возвращает 0, если разрешение или FPS неизвестны.
+    """
+    w = to_int(info.get("width"))
+    h = to_int(info.get("height"))
+    if w <= 0 or h <= 0:
+        return 0
+
+    try:
+        fps = float(info.get("fps"))
+    except (TypeError, ValueError):
+        fps = 0.0
+    if fps <= 0:
+        fps = 25.0
+
+    # Тот же порог понижения разрешения, что и в _build_video_args.
+    if limit_res and (w > 1920 or h > 1080):
+        scale = min(1920 / w, 1080 / h, 1.0)
+        w = int(w * scale)
+        h = int(h * scale)
+
+    bps = EST_BITS_PER_PIXEL_QP22 * (2 ** ((22 - to_int(qp, 22)) / EST_QP_HALVING_STEP)) * w * h * fps
+    if nvenc:
+        bps *= EST_NVENC_BITRATE_FACTOR
+
+    src = source_video_bitrate_bps(info)
+    if src > 0:
+        bps = min(bps, src * EST_SOURCE_BITRATE_CAP)
+
+    return int(bps)
+
+
+def estimate_output_size(info: dict, eff: "RowSettings", audio_sel: int = 0, nvenc: bool = False) -> tuple[int, bool] | None:
+    """
+    Ожидаемый размер выходного файла в байтах.
+    Возвращает (байты, грубая_оценка) либо None, если данных не хватает.
+    Оценка точная для CBR и для «не конв. видео», грубая — для режима QP.
+    """
+    duration = float(info.get("duration") or 0.0)
+    if duration <= 0:
+        return None
+
+    audio_streams = info.get("audio_streams") or []
+    track = audio_streams[audio_sel] if 0 <= audio_sel < len(audio_streams) else {}
+    channels = to_int(track.get("channels")) or 2
+
+    if eff.skip_audio:
+        audio_bps = to_int(track.get("bit_rate")) or get_audio_bitrate_kbps(channels) * 1000
+    else:
+        audio_bps = get_audio_bitrate_kbps(channels) * 1000
+
+    rough = False
+    if eff.skip_video:
+        video_bps = source_video_bitrate_bps(info)
+    elif eff.encode_mode == 1:
+        video_bps = to_int(eff.quality) * 1_000_000
+    else:
+        video_bps = estimate_qp_video_bitrate_bps(info, eff.quality, eff.limit_res, nvenc)
+        rough = True
+
+    if video_bps <= 0:
+        return None
+
+    return int((video_bps + audio_bps) * duration / 8 * EST_CONTAINER_OVERHEAD), rough
+
+
+def format_estimate(est: tuple[int, bool] | None) -> str:
+    """«~ 1.2 GB» для грубой оценки, «≈ 1.2 GB» для расчётной, «?» если оценки нет."""
+    if not est:
+        return "?"
+    size, rough = est
+    return f"{'~' if rough else '≈'} {human_size(size)}"
 
 
 def run_ffprobe_json(args: list[str]) -> dict:
@@ -433,6 +560,10 @@ def parse_video_info(probe: dict) -> dict:
         "requires_tonemap": False,
         "duration": 0.0,
         "size": 0,
+        # Числовые поля для прогноза размера (bitrate выше — только для показа).
+        "video_bitrate_bps": 0,
+        "format_bitrate_bps": 0,
+        "audio_streams": [],
     }
 
     videos = _streams_of_type(probe, "video")
@@ -462,6 +593,13 @@ def parse_video_info(probe: dict) -> dict:
             info["bitrate"] = "?"
     else:
         info["bitrate"] = "?"
+
+    info["video_bitrate_bps"] = to_int(stream.get("bit_rate"))
+    info["format_bitrate_bps"] = to_int(fmt.get("bit_rate"))
+    # Порядок совпадает с порядком дорожек в wx.Choice (см. parse_audio_tracks).
+    info["audio_streams"] = [
+        {"channels": to_int(s.get("channels")), "bit_rate": to_int(s.get("bit_rate"))} for s in _streams_of_type(probe, "audio")
+    ]
 
     # duration
     try:
@@ -623,12 +761,13 @@ class VideoConverter(wx.Frame):
     COL_RES = 1
     COL_BR = 2
     COL_SIZE = 3
-    COL_TIME = 4
-    COL_AUDIO = 5
-    COL_SUBTITLES = 6
-    COL_SETTINGS = 7
-    COL_STATUS = 8
-    COL_PROGRESS = 9
+    COL_EST = 4
+    COL_TIME = 5
+    COL_AUDIO = 6
+    COL_SUBTITLES = 7
+    COL_SETTINGS = 8
+    COL_STATUS = 9
+    COL_PROGRESS = 10
 
     # Базовые заголовки столбцов (без стрелки сортировки)
     COL_LABELS = {
@@ -636,6 +775,7 @@ class VideoConverter(wx.Frame):
         COL_RES: "Разрешение",
         COL_BR: "Битрейт",
         COL_SIZE: "Размер",
+        COL_EST: "Ожид. размер",
         COL_TIME: "Длительность",
         COL_AUDIO: "Аудио дорожка",
         COL_SUBTITLES: "Субтитры",
@@ -740,6 +880,7 @@ class VideoConverter(wx.Frame):
         self.list.InsertColumn(self.COL_RES, self.COL_LABELS[self.COL_RES], width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_BR, self.COL_LABELS[self.COL_BR], width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_SIZE, self.COL_LABELS[self.COL_SIZE], width=self.FromDIP(100))
+        self.list.InsertColumn(self.COL_EST, self.COL_LABELS[self.COL_EST], width=self.FromDIP(110))
         self.list.InsertColumn(self.COL_TIME, self.COL_LABELS[self.COL_TIME], width=self.FromDIP(100))
         self.list.InsertColumn(self.COL_AUDIO, self.COL_LABELS[self.COL_AUDIO], width=self.FromDIP(280))
         self.list.InsertColumn(self.COL_SUBTITLES, self.COL_LABELS[self.COL_SUBTITLES], width=self.FromDIP(240))
@@ -781,7 +922,10 @@ class VideoConverter(wx.Frame):
 CBR — постоянный битрейт видео.
 Чем выше значение, тем лучше качество и больше размер файла.
 Чем ниже значение, тем сильнее сжатие и меньше размер файла.
-Подходит, когда нужен предсказуемый размер или потоковая передача.""")
+Подходит, когда нужен предсказуемый размер или потоковая передача.
+
+Столбец «Ожид. размер» показывает прогноз: точный расчёт для CBR (≈)
+и приблизительную оценку для QP (~), которая уточняется во время кодирования.""")
 
         encode_row.Add(self.encode_mode, 0, wx.ALL | wx.ALIGN_TOP, self.FromDIP(5))
 
@@ -1376,6 +1520,7 @@ CBR — постоянный битрейт видео.
 
             applied += 1
 
+        self.refresh_all_estimates()
         self.log.AppendText(f"\n↪ Настройки дорожек применены к остальным файлам ({applied}).\n")
 
     # --- Сортировка по заголовку столбца ---
@@ -1420,6 +1565,8 @@ CBR — постоянный битрейт видео.
             return self._to_number(info.get("bitrate"), 0)
         if col == self.COL_SIZE:
             return float(info.get("size") or 0)
+        if col == self.COL_EST:
+            return float((s.get("extra") or {}).get("est_bytes") or 0)
         if col == self.COL_TIME:
             return float(s.get("duration") or 0.0)
         if col == self.COL_SUBTITLES:
@@ -1464,6 +1611,7 @@ CBR — постоянный битрейт видео.
             "col_res": self.list.GetItem(row, self.COL_RES).GetText(),
             "col_br": self.list.GetItem(row, self.COL_BR).GetText(),
             "col_size": self.list.GetItem(row, self.COL_SIZE).GetText(),
+            "col_est": self.list.GetItem(row, self.COL_EST).GetText(),
             "col_time": self.list.GetItem(row, self.COL_TIME).GetText(),
             "col_status": self.list.GetItem(row, self.COL_STATUS).GetText(),
             "col_settings": self.list.GetItem(row, self.COL_SETTINGS).GetText(),
@@ -1492,6 +1640,7 @@ CBR — постоянный битрейт видео.
             self.list.SetStringItem(row, self.COL_BR, s["col_br"])
             self.list.SetStringItem(row, self.COL_TIME, s["col_time"])
             self.list.SetStringItem(row, self.COL_SIZE, s["col_size"])
+            self.list.SetStringItem(row, self.COL_EST, s["col_est"])
             self.list.SetStringItem(row, self.COL_STATUS, s["col_status"])
             self.list.SetStringItem(row, self.COL_SETTINGS, s["col_settings"])
 
@@ -1499,6 +1648,7 @@ CBR — постоянный битрейт видео.
             sel = s["audio_sel"]
             if sel != wx.NOT_FOUND and 0 <= sel < choice.GetCount():
                 choice.SetSelection(sel)
+            choice.Bind(wx.EVT_CHOICE, self.on_audio_choice)
             self.list.SetItemWindow(row, self.COL_AUDIO, choice, expand=True)
 
             gauge = wx.Gauge(self.list, range=100, size=self.FromDIP(wx.Size(-1, 18)), style=wx.GA_HORIZONTAL)
@@ -1541,6 +1691,57 @@ CBR — постоянный битрейт видео.
             # SetColumn может сбросить ширину — восстанавливаем её.
             self.list.SetColumnWidth(col, width)
 
+    # --- Прогноз размера ---
+    def _global_settings_for_estimate(self) -> RowSettings:
+        """
+        Глобальные настройки для оценки. Пока строка выделена, панель показывает
+        настройки этой строки, поэтому берём снимок, сделанный при выделении.
+        """
+        if self.global_settings and self.list.GetFirstSelected() != -1:
+            return self.global_settings
+        return self.get_current_settings()
+
+    def update_row_estimate(self, row: int, global_settings: RowSettings | None = None):
+        """Пересчитывает столбец «Ожид. размер» для одной строки."""
+        widgets = self._widgets_at(row)
+        if not widgets:
+            return
+
+        status = self.list.GetItem(row, self.COL_STATUS).GetText()
+        # У конвертируемых и готовых строк там уже живой прогноз или точный размер.
+        if "Конвертация" in status or "Готово" in status:
+            return
+
+        settings: RowSettings = widgets.get("settings") or RowSettings()
+        if settings.is_global:
+            settings = global_settings or self._global_settings_for_estimate()
+
+        choice: wx.Choice | None = widgets.get("choice")
+        audio_sel = choice.GetSelection() if choice else 0
+        if audio_sel == wx.NOT_FOUND:
+            audio_sel = 0
+
+        est = estimate_output_size(widgets.get("info") or {}, settings, audio_sel, self.nvenc_available)
+        widgets["est_bytes"] = int(est[0]) if est else 0
+        widgets["est_text"] = format_estimate(est)
+        self.list.SetStringItem(row, self.COL_EST, widgets["est_text"])
+
+    def refresh_all_estimates(self):
+        """Пересчитывает прогноз по всем строкам (только арифметика, без ffprobe)."""
+        global_settings = self._global_settings_for_estimate()
+        for row in range(self.list.GetItemCount()):
+            self.update_row_estimate(row, global_settings)
+
+    def _restore_row_estimate(self, row: int, widgets: dict, predicted_size: int):
+        """Возвращает в столбец прогноз, посчитанный до старта: файл не готов."""
+        widgets["est_bytes"] = predicted_size
+        wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, widgets.get("est_text") or "?")
+
+    def on_audio_choice(self, event):
+        # При «не конв. аудио» размер зависит от битрейта выбранной дорожки.
+        event.Skip()
+        self.refresh_all_estimates()
+
     # --- Rows ---
     def add_row(
         self,
@@ -1568,6 +1769,7 @@ CBR — постоянный битрейт видео.
         choice = wx.Choice(self.list, choices=audio_choices)
         if audio_choices:
             choice.SetSelection(0)
+        choice.Bind(wx.EVT_CHOICE, self.on_audio_choice)
         self.list.SetItemWindow(row, self.COL_AUDIO, choice, expand=True)
 
         gauge = wx.Gauge(self.list, range=100, size=self.FromDIP(wx.Size(-1, 18)), style=wx.GA_HORIZONTAL)
@@ -1587,6 +1789,7 @@ CBR — постоянный битрейт видео.
             "info": video_info or {},
             "settings": RowSettings(),
         }
+        self.update_row_estimate(row)
         if self.chk_save_subtitles.GetValue():
             self.create_subtitle_widget(row)
 
@@ -1609,6 +1812,7 @@ CBR — постоянный битрейт видео.
             self.log.AppendText("\n⚠ Нет файлов в очереди.\n")
             return
 
+        self.refresh_all_estimates()
         self.all_jobs_duration = sum(float(w.get("duration") or 0.0) for w in self.row_widgets.values())
         self.done_duration = 0.0
         self.cancel_event.clear()
@@ -1665,6 +1869,10 @@ CBR — постоянный битрейт видео.
                 wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
 
+                predicted_size = int(widgets.get("est_bytes") or 0)
+                if predicted_size:
+                    wx.CallAfter(self.log.AppendText, f"💾 Ожидаемый размер: {human_size(predicted_size)}\n")
+
                 settings = widgets["settings"]
 
                 ok = self.run_ffmpeg_with_progress(
@@ -1678,6 +1886,8 @@ CBR — постоянный битрейт видео.
                     gauge=gauge,
                     settings=settings,
                     video_info=widgets.get("info") or {},
+                    row=row,
+                    widgets=widgets,
                 )
 
                 if ok and not self.cancel_event.is_set():
@@ -1688,16 +1898,33 @@ CBR — постоянный битрейт видео.
                             wx.CallAfter(self.log.AppendText, "📌 Теги скопированы\n")
                         else:
                             wx.CallAfter(self.log.AppendText, f"⚠ Не удалось скопировать теги: {tags_err}\n")
+                    # Размер читаем после записи тегов — они меняют файл.
+                    try:
+                        actual_size = os.path.getsize(output_file)
+                    except OSError:
+                        actual_size = 0
+                    if actual_size > 0:
+                        widgets["est_bytes"] = actual_size
+                        wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, human_size(actual_size))
+                        if predicted_size:
+                            wx.CallAfter(
+                                self.log.AppendText,
+                                f"💾 Размер: {human_size(actual_size)} (прогноз: {human_size(predicted_size)})\n",
+                            )
+                        else:
+                            wx.CallAfter(self.log.AppendText, f"💾 Размер: {human_size(actual_size)}\n")
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
                     wx.CallAfter(self.log.AppendText, "\n ✅ Конвертация завершена\n")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
+                    self._restore_row_estimate(row, widgets, predicted_size)
                     wx.CallAfter(gauge.SetValue, 100)
                     break
                 else:
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Ошибка")
+                    self._restore_row_estimate(row, widgets, predicted_size)
                     self.done_duration += duration
 
             if self.cancel_event.is_set():
@@ -1894,6 +2121,8 @@ CBR — постоянный битрейт видео.
         gauge: wx.Gauge | None,
         settings: RowSettings,
         video_info: dict | None = None,
+        row: int = -1,
+        widgets: dict | None = None,
     ) -> bool:
         video_info = video_info or {}
         eff = self._resolve_effective_settings(settings)
@@ -1949,9 +2178,13 @@ CBR — постоянный битрейт видео.
         time_regex = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
         speed_regex = re.compile(r"speed=\s*([\d\.]+)x")
         fps_regex = re.compile(r"fps=\s*([\d\.]+)")
+        size_regex = re.compile(r"size=\s*(\d+)\s*([kKmM])?i?B")
 
         current_speed = "?"
         current_fps = "?"
+        projected_size = 0
+        # Живой прогноз включаем, только когда закодировано достаточно для осмысленной экстраполяции.
+        min_time_for_estimate = max(5.0, total_duration * 0.02)
 
         for line in self.process.stderr:
             if self.cancel_event.is_set():
@@ -1982,6 +2215,19 @@ CBR — постоянный битрейт видео.
             if fm:
                 current_fps = fm.group(1)
 
+            # Прогноз итогового размера по уже записанным байтам.
+            zm = size_regex.search(line)
+            if zm and current_time >= min_time_for_estimate:
+                unit = (zm.group(2) or "").lower()
+                multiplier = 1024 if unit == "k" else (1024 * 1024 if unit == "m" else 1)
+                encoded_bytes = int(zm.group(1)) * multiplier
+                if encoded_bytes > 0:
+                    projected_size = int(encoded_bytes * total_duration / current_time)
+                    if widgets is not None:
+                        widgets["est_bytes"] = projected_size
+                    if row >= 0:
+                        wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, f"≈ {human_size(projected_size)}")
+
             seconds_to_convert = self.all_jobs_duration - overall
             try:
                 remaining_time = format_time(seconds_to_convert / float(current_speed))
@@ -1992,9 +2238,10 @@ CBR — постоянный битрейт видео.
             if gauge:
                 wx.CallAfter(gauge.SetValue, row_progress)
 
+            size_label = f" │ 💾 ≈ {human_size(projected_size)}" if projected_size else ""
             wx.CallAfter(
                 self.progress_label.SetLabel,
-                f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed}x │ 🎞️ {current_fps} fps | ⏲ {remaining_time}",
+                f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed}x │ 🎞️ {current_fps} fps | ⏲ {remaining_time}{size_label}",
             )
 
         # cancel
@@ -2147,6 +2394,7 @@ CBR — постоянный битрейт видео.
             if self.global_settings.skip_video:
                 self.on_skip_video(None)
             self.chk_skip_audio.SetValue(self.global_settings.skip_audio)
+        self.refresh_all_estimates()
 
     def get_row_settings_string(self, row: int, settings: RowSettings):
         if settings.skip_video:
@@ -2183,6 +2431,7 @@ CBR — постоянный битрейт видео.
             self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 251, 235))
             self.list.Refresh()
             item_index = self.list.GetNextSelected(item_index)
+        self.refresh_all_estimates()
 
     def on_limit_res(self, event):
         self.save_settings_to_sel_rows_and_update_list()
@@ -2211,6 +2460,7 @@ CBR — постоянный битрейт видео.
         self.list.SetStringItem(item_index, self.COL_SETTINGS, "⚙️Глобальные")
         self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 255, 255))
         self.list.Refresh()
+        self.refresh_all_estimates()
 
     def on_info_page(self, event):
         description = """\
