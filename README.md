@@ -2,7 +2,7 @@
 
 [English](README.en.md) | **Русский**
 
-![Screenshot](images/screenshot.png)<br>
+![Screenshot](images/screenshot.png)
 
 ## Описание
 
