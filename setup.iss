@@ -1,5 +1,5 @@
 #define MyAppName "Video Converter"
-#define MyAppVersion "0.3.3"
+#define MyAppVersion "0.3.4"
 #define VersionInfoVersion "0.1.0.0"
 #define MyAppPublisher "Vanyunin Alexander"
 
