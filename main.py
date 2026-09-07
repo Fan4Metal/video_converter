@@ -23,7 +23,7 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.3.3"
+__VERSION__ = "0.3.4"
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -197,17 +197,41 @@ def get_audio_bitrate(channels: int) -> str:
 
 
 # --- Прогноз размера выходного файла ---
-# Бит на пиксель для H.264 при QP=22 (эмпирическая константа для грубой оценки).
-EST_BITS_PER_PIXEL_QP22 = 0.09
-# Шаг QP, при котором битрейт меняется вдвое.
-EST_QP_HALVING_STEP = 6.0
-# NVENC при том же значении качества даёт примерно вдвое больший битрейт, чем libx264.
+# Константы откалиброваны на реальных файлах (8 источников 1080p/720p, QP 16–32,
+# см. calibrate_estimate.py): фрагменты кодировались точно теми же аргументами
+# h264_nvenc, что и в _build_video_args, и сравнивались с полными конвертациями.
+#
+# Главный вывод калибровки: при одном и том же QP битрейт NVENC отличается втрое
+# в зависимости от содержимого (чистый WEB-DL ≈ 0.09 бит/пиксель, зернистый
+# BluRay ≈ 0.28), поэтому модель «бит на пиксель» сама по себе даёт ошибку до
+# 2.5×. Битрейт источника — хороший признак сложности картинки: на QP=22 выход
+# NVENC обычно составляет 0.75–1.25 от него. Итоговая оценка — геометрическое
+# смешение двух моделей.
+#
+# Бит на пиксель (за секунду) для h264_nvenc при QP=22, типичное значение.
+# Используется как «якорь» смешения и как единственная модель, когда битрейт
+# источника неизвестен.
+EST_BITS_PER_PIXEL_QP22 = 0.15
+# Вес битрейта источника в смешении (0 — только модель по пикселям, 1 — только
+# источник).
+EST_SOURCE_WEIGHT = 0.6
+# Битрейт источника учитывается только в пределах правдоподобного диапазона
+# бит/пиксель: слишком пережатый источник (0.8 Мбит/с на 1920×800) после
+# перекодирования вырастает в 5–6 раз, слишком «толстый» — сильно ужимается.
+EST_SOURCE_BPP_MIN = 0.10
+EST_SOURCE_BPP_MAX = 0.28
+# Шаг QP, при котором битрейт NVENC меняется вдвое (измерено 5.2–6.2).
+EST_QP_HALVING_STEP = 5.5
+# Потолок битрейта NVENC в режиме -rc vbr -b:v 0: на зернистых источниках
+# 1080p при QP 16–19 выход упирается в ≈16 Мбит/с независимо от QP. Для более
+# крупных кадров потолок масштабируем пропорционально числу пикселей.
+EST_NVENC_CEILING_BPS = 16_000_000
+EST_NVENC_CEILING_PIXEL_RATE = 1920 * 1080 * 24
+# libx264 с тем же числовым значением (CRF) даёт примерно вдвое меньший битрейт,
+# чем NVENC с -cq.
 EST_NVENC_BITRATE_FACTOR = 1.9
 # Накладные расходы контейнера MP4.
 EST_CONTAINER_OVERHEAD = 1.01
-# Страховка от абсурдных значений: битрейт источника — единственный доступный
-# признак сложности картинки, сильно превысить его перекодирование не должно.
-EST_SOURCE_BITRATE_CAP = 2.5
 
 
 def source_video_bitrate_bps(info: dict) -> int:
@@ -234,9 +258,13 @@ def source_video_bitrate_bps(info: dict) -> int:
 
 def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: bool = False) -> int:
     """
-    Грубая оценка битрейта видео в режиме постоянного качества: модель «бит на
-    пиксель» с удвоением/делением пополам каждые EST_QP_HALVING_STEP единиц QP.
-    Возвращает 0, если разрешение или FPS неизвестны.
+    Грубая оценка битрейта видео в режиме постоянного качества.
+
+    Базовый битрейт на QP=22 — геометрическое смешение модели «бит на пиксель»
+    и битрейта источника (ограниченного правдоподобным диапазоном бит/пиксель);
+    дальше он удваивается/делится пополам каждые EST_QP_HALVING_STEP единиц QP
+    и упирается в потолок NVENC. Для libx264 результат делится на
+    EST_NVENC_BITRATE_FACTOR. Возвращает 0, если разрешение неизвестно.
     """
     w = to_int(info.get("width"))
     h = to_int(info.get("height"))
@@ -250,19 +278,29 @@ def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: b
     if fps <= 0:
         fps = 25.0
 
+    src_pixel_rate = w * h * fps
     # Тот же порог понижения разрешения, что и в _build_video_args.
     if limit_res and (w > 1920 or h > 1080):
         scale = min(1920 / w, 1080 / h, 1.0)
         w = int(w * scale)
         h = int(h * scale)
+    pixel_rate = w * h * fps
 
-    bps = EST_BITS_PER_PIXEL_QP22 * (2 ** ((22 - to_int(qp, 22)) / EST_QP_HALVING_STEP)) * w * h * fps
-    if nvenc:
-        bps *= EST_NVENC_BITRATE_FACTOR
+    pixel_model = EST_BITS_PER_PIXEL_QP22 * pixel_rate
 
     src = source_video_bitrate_bps(info)
     if src > 0:
-        bps = min(bps, src * EST_SOURCE_BITRATE_CAP)
+        # При понижении разрешения битрейт источника пересчитываем на новое число пикселей.
+        src = src * pixel_rate / src_pixel_rate
+        src = min(max(src, EST_SOURCE_BPP_MIN * pixel_rate), EST_SOURCE_BPP_MAX * pixel_rate)
+        base = src**EST_SOURCE_WEIGHT * pixel_model ** (1.0 - EST_SOURCE_WEIGHT)
+    else:
+        base = pixel_model
+
+    bps = base * (2 ** ((22 - to_int(qp, 22)) / EST_QP_HALVING_STEP))
+    bps = min(bps, EST_NVENC_CEILING_BPS * max(1.0, pixel_rate / EST_NVENC_CEILING_PIXEL_RATE))
+    if not nvenc:
+        bps /= EST_NVENC_BITRATE_FACTOR
 
     return int(bps)
 

@@ -70,7 +70,7 @@ Select one or more rows and change a setting, and it is stored for those rows on
 
 Click a header to sort, click again to reverse the direction. The subtitle column only appears when "сохранить субтитры" is enabled.
 
-**Expected size** is computed up front: `≈` marks an exact calculation (CBR or stream copy), `~` a rough estimate for QP mode (a bits-per-pixel model capped by the source bitrate). During encoding the estimate is refined from live FFmpeg data, and when the job finishes the column shows the actual file size.
+**Expected size** is computed up front: `≈` marks an exact calculation (CBR or stream copy), `~` a rough estimate for QP mode (a blend of a bits-per-pixel model and the source bitrate, calibrated against real NVENC encodes). During encoding the estimate is refined from live FFmpeg data, and when the job finishes the column shows the actual file size.
 
 ### Working with the list
 
