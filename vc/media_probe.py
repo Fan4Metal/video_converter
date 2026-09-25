@@ -295,7 +295,13 @@ def parse_video_info(probe: dict) -> dict:
     info["format_bitrate_bps"] = to_int(fmt.get("bit_rate"))
     # Порядок совпадает с порядком дорожек в wx.Choice (см. parse_audio_tracks).
     info["audio_streams"] = [
-        {"channels": to_int(s.get("channels")), "bit_rate": to_int(s.get("bit_rate"))} for s in streams_of_type(probe, "audio")
+        {
+            "channels": to_int(s.get("channels")),
+            "bit_rate": to_int(s.get("bit_rate")),
+            "language": (s.get("tags", {}) or {}).get("language", "und"),
+            "title": fix_text_encoding(((s.get("tags", {}) or {}).get("title") or "").strip()),
+        }
+        for s in streams_of_type(probe, "audio")
     ]
 
     # duration

@@ -5,7 +5,7 @@ import subprocess
 import wx
 
 from vc.resources import MPV_PATH
-from vc.widgets import SubtitleCheckCombo
+from vc.widgets import CheckListCombo
 
 
 class ContextMenuMixin:
@@ -178,6 +178,7 @@ class ContextMenuMixin:
         """
         Применяет к остальным файлам в списке те же настройки выбора дорожек:
         - ту же аудио дорожку по её порядковому номеру (если у файла она есть);
+        - если включена опция «несколько аудио дорожек» — тот же набор дорожек по номерам;
         - если включена опция «сохранить субтитры» — те же субтитры по номеру.
         """
         if self.converting:
@@ -190,8 +191,12 @@ class ContextMenuMixin:
         source_choice: wx.Choice | None = source.get("choice")
         audio_index = source_choice.GetSelection() if source_choice else wx.NOT_FOUND
 
+        multi_audio = self.chk_multi_audio.GetValue()
+        source_multi: CheckListCombo | None = source.get("audio_multi")
+        multi_indexes = source_multi.GetCheckedItems() if (multi_audio and source_multi) else []
+
         save_subtitles = self.chk_save_subtitles.GetValue()
-        source_subtitles: SubtitleCheckCombo | None = source.get("subtitles")
+        source_subtitles: CheckListCombo | None = source.get("subtitles")
         subtitle_indexes = source_subtitles.GetCheckedItems() if (save_subtitles and source_subtitles) else []
 
         applied = 0
@@ -207,10 +212,18 @@ class ContextMenuMixin:
             if choice and audio_index != wx.NOT_FOUND and audio_index < choice.GetCount():
                 choice.SetSelection(audio_index)
 
+            # Набор аудиодорожек по номерам
+            if multi_audio:
+                self.create_audio_multi_widget(row)
+                multi: CheckListCombo | None = widgets.get("audio_multi")
+                if multi:
+                    track_count = len(widgets.get("audio_choices") or [])
+                    multi.SetCheckedItems([i for i in multi_indexes if i < track_count])
+
             # Субтитры по номеру
             if save_subtitles:
                 self.create_subtitle_widget(row)
-                subtitles: SubtitleCheckCombo | None = widgets.get("subtitles")
+                subtitles: CheckListCombo | None = widgets.get("subtitles")
                 if subtitles:
                     track_count = len(widgets.get("subtitle_tracks") or [])
                     subtitles.SetCheckedItems([i for i in subtitle_indexes if i < track_count])

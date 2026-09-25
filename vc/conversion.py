@@ -14,7 +14,7 @@ from vc.media_probe import get_audio_channels, get_hdr_info, get_video_info
 from vc.resources import FFMPEG_PATH, get_resource_path
 from vc.settings import RowSettings
 from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
-from vc.widgets import SubtitleCheckCombo
+from vc.widgets import CheckListCombo
 
 
 class ConversionMixin:
@@ -76,22 +76,17 @@ class ConversionMixin:
                     continue
                 duration = float(widgets.get("duration") or 0.0)
                 gauge: wx.Gauge | None = widgets.get("gauge")
-                choice: wx.Choice | None = widgets.get("choice")
                 if not path or not os.path.isfile(path):
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет файла")
                     if gauge:
                         wx.CallAfter(gauge.SetValue, 0)
                     continue
 
-                selected_track = choice.GetSelection() if choice else wx.NOT_FOUND
-                if selected_track == wx.NOT_FOUND:
-                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет аудио")
-                    if gauge:
-                        wx.CallAfter(gauge.SetValue, 0)
-                    continue
-
-                audio_channels = get_audio_channels(path, selected_track)
-                bitrate = get_audio_bitrate(audio_channels)
+                # Пустой список дорожек — выходной файл без аудио.
+                audio_tracks: list[tuple[int, int, str]] = []
+                for track_index in self.selected_audio_tracks(widgets):
+                    audio_channels = get_audio_channels(path, track_index)
+                    audio_tracks.append((track_index, audio_channels, get_audio_bitrate(audio_channels)))
                 output_file = unique_output_path(self.save_folder, path, self.toggle_suffix.GetValue())
                 selected_subtitles = self.get_selected_subtitles(widgets) if self.chk_save_subtitles.GetValue() else []
 
@@ -114,9 +109,7 @@ class ConversionMixin:
                 ok = self.run_ffmpeg_with_progress(
                     input_path=path,
                     output_path=output_file,
-                    selected_track=selected_track,
-                    bitrate=bitrate,
-                    audio_channels=audio_channels,
+                    audio_tracks=audio_tracks,
                     selected_subtitles=selected_subtitles,
                     duration=duration,
                     gauge=gauge,
@@ -186,7 +179,7 @@ class ConversionMixin:
             wx.CallAfter(self.enable_interface)
 
     def get_selected_subtitles(self, widgets: dict) -> list[dict]:
-        subtitle_list: SubtitleCheckCombo | None = widgets.get("subtitles")
+        subtitle_list: CheckListCombo | None = widgets.get("subtitles")
         subtitle_tracks = widgets.get("subtitle_tracks") or []
         if not subtitle_list:
             return []
@@ -215,12 +208,43 @@ class ConversionMixin:
         """
         return settings if not settings.is_global else self.get_current_settings()
 
-    def _build_audio_args(self, skip_audio: bool, audio_channels: int, bitrate: str) -> list[str]:
-        if skip_audio:
-            wx.CallAfter(self.log.AppendText, "🎵 Аудио: copy\n")
-            return ["-c:a", "copy"]
-        wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
-        return ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate]
+    def _build_audio_args(
+        self, skip_audio: bool, audio_tracks: list[tuple[int, int, str]], video_info: dict
+    ) -> tuple[list[str], list[str]]:
+        """
+        Возвращает (codec_args, metadata_args) для аудио. audio_tracks — список
+        (индекс a:N, каналы, битрейт), основная дорожка первая; пустой список —
+        без аудио. Для одной дорожки аргументы прежние; для нескольких — параметры
+        и метаданные (язык, название, флаг default) задаются по каждому выходному потоку.
+        """
+        if not audio_tracks:
+            wx.CallAfter(self.log.AppendText, "🎵 Аудио: нет\n")
+            return ["-an"], []
+        if len(audio_tracks) == 1:
+            _, audio_channels, bitrate = audio_tracks[0]
+            if skip_audio:
+                wx.CallAfter(self.log.AppendText, "🎵 Аудио: copy\n")
+                return ["-c:a", "copy"], []
+            wx.CallAfter(self.log.AppendText, f"🎵 Аудио: AAC, {audio_channels}ch, {bitrate}\n")
+            return ["-c:a", "aac", "-ac", str(audio_channels), "-b:a", bitrate], []
+
+        audio_streams = video_info.get("audio_streams") or []
+        codec_args: list[str] = ["-c:a", "copy"] if skip_audio else []
+        metadata_args: list[str] = []
+        for out_index, (track_index, audio_channels, bitrate) in enumerate(audio_tracks):
+            if skip_audio:
+                wx.CallAfter(self.log.AppendText, f"🎵 Аудио #{track_index}: copy\n")
+            else:
+                codec_args += [f"-c:a:{out_index}", "aac", f"-ac:a:{out_index}", str(audio_channels), f"-b:a:{out_index}", bitrate]
+                wx.CallAfter(self.log.AppendText, f"🎵 Аудио #{track_index}: AAC, {audio_channels}ch, {bitrate}\n")
+            stream = audio_streams[track_index] if 0 <= track_index < len(audio_streams) else {}
+            language = str(stream.get("language") or "und")
+            title = str(stream.get("title") or "").strip()
+            metadata_args += [f"-metadata:s:a:{out_index}", f"language={language}"]
+            if title:
+                metadata_args += [f"-metadata:s:a:{out_index}", f"title={title}", f"-metadata:s:a:{out_index}", f"handler_name={title}"]
+            metadata_args += [f"-disposition:a:{out_index}", "default" if out_index == 0 else "0"]
+        return codec_args, metadata_args
 
     def _build_subtitle_args(self, selected_subtitles: list[dict]) -> tuple[list[str], list[str], list[str]]:
         """Возвращает (map_args, codec_args, metadata_args) для субтитров."""
@@ -354,9 +378,7 @@ class ConversionMixin:
         self,
         input_path: str,
         output_path: str,
-        selected_track: int,
-        bitrate: str,
-        audio_channels: int,
+        audio_tracks: list[tuple[int, int, str]],
         selected_subtitles: list[dict],
         duration: float,
         gauge: wx.Gauge | None,
@@ -368,7 +390,8 @@ class ConversionMixin:
         video_info = video_info or {}
         eff = self._resolve_effective_settings(settings)
 
-        audio_codec_args = self._build_audio_args(eff.skip_audio, audio_channels, bitrate)
+        audio_map_args = [arg for track_index, _, _ in audio_tracks for arg in ("-map", f"0:a:{track_index}")]
+        audio_codec_args, audio_metadata_args = self._build_audio_args(eff.skip_audio, audio_tracks, video_info)
         subtitle_map_args, subtitle_codec_args, subtitle_metadata_args = self._build_subtitle_args(selected_subtitles)
         video_args = self._build_video_args(
             input_path=input_path,
@@ -388,13 +411,13 @@ class ConversionMixin:
             input_path,
             "-map",
             "0:v:0",
-            "-map",
-            f"0:a:{selected_track}",
+            *audio_map_args,
             *subtitle_map_args,
             *video_args,
             *audio_codec_args,
             "-map_metadata",
             "-1",
+            *audio_metadata_args,
             *subtitle_metadata_args,
             "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
             "filter_units=remove_types=6",

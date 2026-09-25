@@ -59,6 +59,7 @@ Requirements: Windows 10/11 x64. For hardware acceleration — an NVIDIA GPU wit
 | не конв. аудио | The audio stream is copied without re-encoding. |
 | копировать теги | Copies tags from the source MP4 to the result. A global setting. |
 | сохранить субтитры | Shows the subtitle column and muxes the checked text tracks into the MP4. |
+| несколько аудио дорожек | Replaces the "Аудио дорожка" (Audio track) column with an "Аудио дорожки" (Audio tracks) check list. The checked tracks are muxed into the MP4 keeping language and title; the first of them becomes the main one (flagged as default). With nothing checked, the file is converted without audio. |
 | Debug | Prints raw FFmpeg output to the log. |
 
 ### Global and per-row settings
@@ -71,7 +72,7 @@ Select one or more rows and change a setting, and it is stored for those rows on
 
 `File` · `Resolution` · `Bitrate` · `Size` · `Expected size` · `Duration` · `Audio track` · `Subtitles` · `Settings` · `Status` · `Progress`
 
-Click a header to sort, click again to reverse the direction. The subtitle column only appears when "сохранить субтитры" is enabled.
+Click a header to sort, click again to reverse the direction. The subtitle column only appears when "сохранить субтитры" is enabled, and "несколько аудио дорожек" swaps the "Audio track" column for an "Audio tracks" check list.
 
 **Expected size** is computed up front: `≈` marks an exact calculation (CBR or stream copy), `~` a rough estimate for QP mode (a blend of a bits-per-pixel model and the source bitrate, calibrated against real NVENC encodes). During encoding the estimate is refined from live FFmpeg data, and when the job finishes the column shows the actual file size. The context menu items "Estimate size with a test encode" (for the selected files or for all of them) encode six 10-second fragments with the same parameters as the conversion and replace the rough estimate with a measurement (`≈`); a later QP change rescales the measurement.
 

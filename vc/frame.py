@@ -22,7 +22,7 @@ from vc.single_instance import InstanceServer
 from vc.sorting import SortingMixin
 from vc.utils import format_time, human_size
 from vc.version import __VERSION__
-from vc.widgets import FileDropTarget, SubtitleCheckCombo
+from vc.widgets import CheckListCombo, FileDropTarget
 
 
 class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, ProbeMixin, ConversionMixin, wx.Frame):
@@ -33,10 +33,11 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
     COL_EST = 4
     COL_TIME = 5
     COL_AUDIO = 6
-    COL_SUBTITLES = 7
-    COL_SETTINGS = 8
-    COL_STATUS = 9
-    COL_PROGRESS = 10
+    COL_AUDIO_MULTI = 7
+    COL_SUBTITLES = 8
+    COL_SETTINGS = 9
+    COL_STATUS = 10
+    COL_PROGRESS = 11
 
     # Базовые заголовки столбцов (без стрелки сортировки)
     COL_LABELS = {
@@ -47,6 +48,7 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
         COL_EST: "Ожид. размер",
         COL_TIME: "Длительность",
         COL_AUDIO: "Аудио дорожка",
+        COL_AUDIO_MULTI: "Аудио дорожки",
         COL_SUBTITLES: "Субтитры",
         COL_SETTINGS: "Параметры",
         COL_STATUS: "Статус",
@@ -62,6 +64,7 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
         COL_EST: 101,
         COL_TIME: 100,
         COL_AUDIO: 280,
+        COL_AUDIO_MULTI: 280,
         COL_SUBTITLES: 240,
         COL_SETTINGS: 170,
         COL_STATUS: 110,
@@ -70,6 +73,8 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
     # Запас к ширине заголовка и минимальная ширина растягиваемого столбца прогресса (DIP).
     COL_HEADER_PADDING = 6
     COL_PROGRESS_MIN = 90
+    # Ключи встроенных в строку виджетов (уничтожаются вместе со строкой).
+    ROW_WIDGET_KEYS = ("choice", "audio_multi", "subtitles", "gauge")
 
     def __init__(self):
         super().__init__(
@@ -181,6 +186,7 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
 
         for col in sorted(self.COL_DEFAULT_WIDTHS):
             self.list.InsertColumn(col, self.COL_LABELS[col], width=self._column_width(col))
+        self.list.SetColumnShown(self.COL_AUDIO_MULTI, False)
         self.list.SetColumnShown(self.COL_SUBTITLES, False)
 
         self.list.Bind(wx.EVT_SIZE, self.on_list_size)
@@ -291,6 +297,17 @@ CBR — постоянный битрейт видео.
         self.chk_save_subtitles.SetValue(False)
         self.chk_save_subtitles.Bind(wx.EVT_CHECKBOX, self.on_save_subtitles)
         options_box.Add(self.chk_save_subtitles, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
+
+        self.chk_multi_audio = wx.CheckBox(panel, label="несколько аудио дорожек")
+        self.chk_multi_audio.SetToolTip(
+            wx.ToolTip(
+                "Выбирать для каждого файла несколько аудиодорожек вместо одной.\n"
+                "Отмеченные дорожки сохраняются в MP4, первая из них становится основной."
+            )
+        )
+        self.chk_multi_audio.SetValue(False)
+        self.chk_multi_audio.Bind(wx.EVT_CHECKBOX, self.on_multi_audio)
+        options_box.Add(self.chk_multi_audio, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(5))
 
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
@@ -473,7 +490,7 @@ CBR — постоянный битрейт видео.
 
         # уничтожаем виджеты
         for w in self.row_widgets.values():
-            for key in ("choice", "subtitles", "gauge"):
+            for key in self.ROW_WIDGET_KEYS:
                 try:
                     ctrl = w.get(key)
                     if ctrl:
@@ -493,7 +510,7 @@ CBR — постоянный битрейт видео.
         uid = self.row_order[row]
         w = self.row_widgets.get(uid)
         if w:
-            for key in ("choice", "subtitles", "gauge"):
+            for key in self.ROW_WIDGET_KEYS:
                 try:
                     if w.get(key):
                         w[key].Destroy()
@@ -566,7 +583,7 @@ CBR — постоянный битрейт видео.
             widgets = self._widgets_at(row)
             if not widgets:
                 continue
-            for key in ("choice", "subtitles", "gauge"):
+            for key in self.ROW_WIDGET_KEYS:
                 ctrl = widgets.get(key)
                 if ctrl is not None:
                     widget_to_row[id(ctrl)] = row
@@ -648,21 +665,42 @@ CBR — постоянный битрейт видео.
         self.SetMinSize(min_size)
 
     def on_save_subtitles(self, event):
-        enabled = self.chk_save_subtitles.GetValue()
+        self._toggle_track_column("subtitles", self.COL_SUBTITLES, self.chk_save_subtitles.GetValue(), self.create_subtitle_widget)
+
+    def on_multi_audio(self, event):
+        """
+        Переключает выбор аудио между одной дорожкой (wx.Choice) и списком с галочками.
+        Столбцы показываются по очереди, выбор переносится между ними: при включении
+        отмечается текущая дорожка, при выключении основной становится первая отмеченная.
+        """
+        enabled = self.chk_multi_audio.GetValue()
+        if not enabled:
+            for widgets in self.row_widgets.values():
+                tracks = self.selected_audio_tracks(widgets)
+                choice: wx.Choice | None = widgets.get("choice")
+                if tracks and choice and tracks[0] < choice.GetCount():
+                    choice.SetSelection(tracks[0])
+        self._toggle_track_column("audio_multi", self.COL_AUDIO_MULTI, enabled, self.create_audio_multi_widget)
+        self.list.SetColumnShown(self.COL_AUDIO, not enabled)
+        # Набор дорожек входит в прогноз размера.
+        self.refresh_all_estimates()
+
+    def _toggle_track_column(self, key: str, col: int, enabled: bool, create_widget):
+        """Показывает столбец с виджетами выбора дорожек (создавая их) или прячет, уничтожая виджеты."""
         if enabled:
             for row in range(self.list.GetItemCount()):
-                self.create_subtitle_widget(row)
+                create_widget(row)
         else:
             for widgets in self.row_widgets.values():
-                subtitles = widgets.get("subtitles")
-                if subtitles:
+                ctrl = widgets.get(key)
+                if ctrl:
                     try:
-                        subtitles.Destroy()
+                        ctrl.Destroy()
                     except Exception:
                         pass
-                widgets["subtitles"] = None
+                widgets[key] = None
 
-        self.list.SetColumnShown(self.COL_SUBTITLES, enabled)
+        self.list.SetColumnShown(col, enabled)
         self._schedule_progress_fit()
         self.Layout()
 
@@ -721,12 +759,9 @@ CBR — постоянный битрейт видео.
         if settings.is_global:
             settings = global_settings or self._global_settings_for_estimate()
 
-        choice: wx.Choice | None = widgets.get("choice")
-        audio_sel = choice.GetSelection() if choice else 0
-        if audio_sel == wx.NOT_FOUND:
-            audio_sel = 0
-
-        est = estimate_output_size(widgets.get("info") or {}, settings, audio_sel, self.nvenc_available, widgets.get("probe"))
+        est = estimate_output_size(
+            widgets.get("info") or {}, settings, self.selected_audio_tracks(widgets), self.nvenc_available, widgets.get("probe")
+        )
         widgets["est_bytes"] = int(est[0]) if est else 0
         widgets["est_text"] = format_estimate(est)
         self.list.SetStringItem(row, self.COL_EST, widgets["est_text"])
@@ -746,6 +781,19 @@ CBR — постоянный битрейт видео.
         # При «не конв. аудио» размер зависит от битрейта выбранной дорожки.
         event.Skip()
         self.refresh_all_estimates()
+
+    def selected_audio_tracks(self, widgets: dict) -> list[int]:
+        """
+        Индексы (a:N) аудиодорожек строки для вывода, основная первая. В режиме
+        нескольких дорожек — отмеченные в списке, иначе — выбранная в wx.Choice.
+        Пустой список — файл конвертируется без аудио.
+        """
+        combo: CheckListCombo | None = widgets.get("audio_multi")
+        if combo:
+            return combo.GetCheckedItems()
+        choice: wx.Choice | None = widgets.get("choice")
+        sel = choice.GetSelection() if choice else wx.NOT_FOUND
+        return [] if sel == wx.NOT_FOUND else [sel]
 
     # --- Rows ---
     def add_row(
@@ -787,6 +835,8 @@ CBR — постоянный битрейт видео.
         self.row_widgets[uid] = {
             "path": path,
             "choice": choice,
+            "audio_choices": audio_choices,
+            "audio_multi": None,
             "subtitles": None,
             "subtitle_tracks": subtitle_tracks,
             "gauge": gauge,
@@ -797,6 +847,8 @@ CBR — постоянный битрейт видео.
         self.update_row_estimate(row)
         # Появившаяся вертикальная полоса прокрутки сужает список.
         self._schedule_progress_fit()
+        if self.chk_multi_audio.GetValue():
+            self.create_audio_multi_widget(row)
         if self.chk_save_subtitles.GetValue():
             self.create_subtitle_widget(row)
         if self.converting:
@@ -808,9 +860,25 @@ CBR — постоянный битрейт видео.
         if not widgets or widgets.get("subtitles"):
             return
         subtitle_choices = [track["display"] for track in widgets.get("subtitle_tracks", [])]
-        subtitles = SubtitleCheckCombo(self.list, choices=subtitle_choices)
+        subtitles = CheckListCombo(self.list, choices=subtitle_choices)
         self.list.SetItemWindow(row, self.COL_SUBTITLES, subtitles, expand=True)
         widgets["subtitles"] = subtitles
+
+    def create_audio_multi_widget(self, row: int):
+        widgets = self._widgets_at(row)
+        if not widgets or widgets.get("audio_multi"):
+            return
+        combo = CheckListCombo(
+            self.list,
+            choices=list(widgets.get("audio_choices") or []),
+            empty_label="Нет дорожек",
+            none_label="Без аудио",
+            on_change=self.refresh_all_estimates,
+        )
+        # Стартуем с дорожки, выбранной в обычном столбце.
+        combo.SetCheckedItems(self.selected_audio_tracks(widgets))
+        self.list.SetItemWindow(row, self.COL_AUDIO_MULTI, combo, expand=True)
+        widgets["audio_multi"] = combo
 
     def on_item_select(self, event):
         self.global_settings = self.get_current_settings()
@@ -843,6 +911,7 @@ CBR — постоянный битрейт видео.
             self.btn_clear_save_folder,
             self.toggle_suffix,
             self.chk_save_subtitles,
+            self.chk_multi_audio,
             self.slider_label,
             self.chk_limit_res,
             self.tonemapping_label,
@@ -855,7 +924,7 @@ CBR — постоянный битрейт видео.
     @staticmethod
     def _set_row_widgets_enabled(widgets: dict, enabled: bool):
         """Блокирует/разблокирует виджеты выбора дорожек одной строки."""
-        for key in ("choice", "subtitles"):
+        for key in ("choice", "audio_multi", "subtitles"):
             ctrl = widgets.get(key)
             if ctrl:
                 ctrl.Enable(enabled)

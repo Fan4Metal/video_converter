@@ -136,10 +136,15 @@ def probe_video_bitrate_bps(probe: dict | None, eff: RowSettings, nvenc: bool) -
 
 
 def estimate_output_size(
-    info: dict, eff: RowSettings, audio_sel: int = 0, nvenc: bool = False, probe: dict | None = None
+    info: dict,
+    eff: RowSettings,
+    audio_tracks: list[int],
+    nvenc: bool = False,
+    probe: dict | None = None,
 ) -> tuple[int, bool] | None:
     """
-    Ожидаемый размер выходного файла в байтах.
+    Ожидаемый размер выходного файла в байтах. audio_tracks — индексы (a:N)
+    аудиодорожек, попадающих в выходной файл; пустой список — без аудио.
     Возвращает (байты, грубая_оценка) либо None, если данных не хватает.
     Оценка точная для CBR, для «не конв. видео» и для режима QP, если есть
     контрольная кодировка при том же QP; в остальных случаях для QP — грубая.
@@ -149,13 +154,14 @@ def estimate_output_size(
         return None
 
     audio_streams = info.get("audio_streams") or []
-    track = audio_streams[audio_sel] if 0 <= audio_sel < len(audio_streams) else {}
-    channels = to_int(track.get("channels")) or 2
-
-    if eff.skip_audio:
-        audio_bps = to_int(track.get("bit_rate")) or get_audio_bitrate_kbps(channels) * 1000
-    else:
-        audio_bps = get_audio_bitrate_kbps(channels) * 1000
+    audio_bps = 0
+    for sel in dict.fromkeys(audio_tracks):
+        track = audio_streams[sel] if 0 <= sel < len(audio_streams) else {}
+        channels = to_int(track.get("channels")) or 2
+        if eff.skip_audio:
+            audio_bps += to_int(track.get("bit_rate")) or get_audio_bitrate_kbps(channels) * 1000
+        else:
+            audio_bps += get_audio_bitrate_kbps(channels) * 1000
 
     rough = False
     if eff.skip_video:

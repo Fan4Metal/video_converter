@@ -77,9 +77,14 @@ class SortingMixin:
         w = self.row_widgets[uid]
         choice: wx.Choice | None = w.get("choice")
         subtitles = w.get("subtitles")
+        audio_multi = w.get("audio_multi")
         gauge: wx.Gauge | None = w.get("gauge")
         # Прочие ключи (например, output_file), добавленные после конвертации.
-        extra = {k: v for k, v in w.items() if k not in ("path", "choice", "subtitles", "subtitle_tracks", "gauge", "duration", "info", "settings")}
+        extra = {
+            k: v
+            for k, v in w.items()
+            if k not in ("path", "choice", "audio_choices", "audio_multi", "subtitles", "subtitle_tracks", "gauge", "duration", "info", "settings")
+        }
         return {
             "uid": uid,
             "path": w.get("path"),
@@ -89,6 +94,8 @@ class SortingMixin:
             "subtitle_tracks": w.get("subtitle_tracks"),
             "audio_choices": [choice.GetString(i) for i in range(choice.GetCount())] if choice else [],
             "audio_sel": choice.GetSelection() if choice else wx.NOT_FOUND,
+            "has_audio_multi_widget": audio_multi is not None,
+            "audio_multi_checked": audio_multi.GetCheckedItems() if audio_multi else None,
             "has_subtitle_widget": subtitles is not None,
             "subtitle_checked": subtitles.GetCheckedItems() if subtitles else None,
             "gauge_value": gauge.GetValue() if gauge else 0,
@@ -107,7 +114,7 @@ class SortingMixin:
         """Перестраивает список в порядке snaps, пересоздавая встроенные виджеты."""
         # Уничтожаем старые виджеты
         for w in self.row_widgets.values():
-            for key in ("choice", "subtitles", "gauge"):
+            for key in self.ROW_WIDGET_KEYS:
                 try:
                     ctrl = w.get(key)
                     if ctrl:
@@ -146,6 +153,8 @@ class SortingMixin:
             self.row_widgets[uid] = {
                 "path": s["path"],
                 "choice": choice,
+                "audio_choices": s["audio_choices"],
+                "audio_multi": None,
                 "subtitles": None,
                 "subtitle_tracks": s["subtitle_tracks"],
                 "gauge": gauge,
@@ -154,6 +163,11 @@ class SortingMixin:
                 "settings": s["settings"],
                 **(s.get("extra") or {}),
             }
+            if s["has_audio_multi_widget"]:
+                self.create_audio_multi_widget(row)
+                combo = self.row_widgets[uid].get("audio_multi")
+                if combo is not None and s["audio_multi_checked"] is not None:
+                    combo.SetCheckedItems(s["audio_multi_checked"])
             if s["has_subtitle_widget"]:
                 self.create_subtitle_widget(row)
                 sub = self.row_widgets[uid].get("subtitles")

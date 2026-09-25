@@ -1,4 +1,7 @@
-"""Вспомогательные wx-виджеты: приём перетаскивания и список субтитров с галочками."""
+"""Вспомогательные wx-виджеты: приём перетаскивания и выпадающий список с галочками."""
+
+from collections.abc import Callable
+
 import wx
 
 
@@ -14,7 +17,7 @@ class FileDropTarget(wx.FileDropTarget):
         return True
 
 
-class SubtitleCheckPopup(wx.ComboPopup):
+class CheckListPopup(wx.ComboPopup):
     def __init__(self):
         super().__init__()
         self.combo = None
@@ -44,18 +47,37 @@ class SubtitleCheckPopup(wx.ComboPopup):
     def on_check(self, event):
         if self.combo:
             self.combo.update_summary()
+            if self.combo.on_change:
+                self.combo.on_change()
         event.Skip()
 
 
-class SubtitleCheckCombo(wx.ComboCtrl):
-    def __init__(self, parent, choices: list[str]):
+class CheckListCombo(wx.ComboCtrl):
+    """
+    Выпадающий список с галочками (дорожки субтитров, дополнительные аудиодорожки).
+    В свёрнутом виде показывает сводку: empty_label (нет вариантов), none_label
+    (ничего не отмечено) или «Выбраны: N».
+    on_change вызывается после каждого изменения галочек пользователем.
+    """
+
+    def __init__(
+        self,
+        parent,
+        choices: list[str],
+        empty_label: str = "Нет субтитров",
+        none_label: str = "Не выбраны",
+        on_change: Callable[[], None] | None = None,
+    ):
         super().__init__(parent, style=wx.CB_READONLY)
         self.choices = choices
-        self.popup = SubtitleCheckPopup()
+        self.empty_label = empty_label
+        self.none_label = none_label
+        self.on_change = on_change
+        self.popup = CheckListPopup()
         self.SetPopupControl(self.popup)
         self.popup.combo = self
-        self.SetValue("Нет субтитров" if not choices else "Не выбраны")
-        wx.CallAfter(self.populate_popup)
+        self.SetValue(empty_label if not choices else none_label)
+        self.populate_popup()
 
     def populate_popup(self):
         checklist = self.popup.checklist
@@ -82,9 +104,9 @@ class SubtitleCheckCombo(wx.ComboCtrl):
     def update_summary(self):
         checked = self.GetCheckedItems()
         if not self.choices:
-            text = "Нет субтитров"
+            text = self.empty_label
         elif not checked:
-            text = "Не выбраны"
+            text = self.none_label
         else:
             text = f"Выбраны: {len(checked)}"
         self.SetValue(text)
