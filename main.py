@@ -928,6 +928,10 @@ class VideoConverter(wx.Frame):
         self.converting = False
         self.process: subprocess.Popen | None = None
         self.cancel_event = threading.Event()
+        # Пропуск текущего файла из контекстного меню (без остановки очереди)
+        self.skip_event = threading.Event()
+        self._current_uid: int | None = None  # uid строки, которая конвертируется сейчас
+        self._queue_row = -1  # индекс строки, до которой дошла очередь
         self._instance_server: socket.socket | None = None
         # Контрольная кодировка (оценка размера по фрагментам)
         self.probing = False
@@ -1607,6 +1611,17 @@ CBR — постоянный битрейт видео.
         self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.start_probe, list(range(self.list.GetItemCount()))), probe_all_item)
         menu.AppendSeparator()
 
+        status = self.list.GetItem(item, self.COL_STATUS).GetText()
+        if self.converting and widgets.get("skip") and item > self._queue_row:
+            unskip_item = menu.Append(wx.ID_ANY, "↩ Вернуть в очередь")
+            self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.unskip_rows, self._selected_rows() or [item]), unskip_item)
+        else:
+            skip_item = menu.Append(wx.ID_ANY, "⏭ Пропустить")
+            can_skip = self.converting and (status == "Ожидает" or "Конвертация" in status)
+            skip_item.Enable(can_skip)
+            self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.skip_rows, self._selected_rows() or [item]), skip_item)
+        menu.AppendSeparator()
+
         settings_obj = widgets.get("settings")
         if settings_obj and not settings_obj.is_global:
             reset_convert_settings_item = menu.Append(wx.ID_ANY, "🔄 Сбросить настройки конвертации")
@@ -2238,6 +2253,11 @@ CBR — постоянный битрейт видео.
         self.all_jobs_duration = sum(float(w.get("duration") or 0.0) for w in self.row_widgets.values())
         self.done_duration = 0.0
         self.cancel_event.clear()
+        self.skip_event.clear()
+        self._current_uid = None
+        self._queue_row = -1
+        for w in self.row_widgets.values():
+            w["skip"] = False
         self.converting = True
 
         self.btn_start.SetLabel("⏹ Отмена")
@@ -2260,6 +2280,7 @@ CBR — постоянный битрейт видео.
             while row + 1 < len(self.row_order):
                 row += 1
                 uid = self.row_order[row]
+                self._queue_row = row
                 if self.cancel_event.is_set():
                     break
 
@@ -2267,6 +2288,10 @@ CBR — постоянный битрейт видео.
                 if not widgets:
                     continue
                 path = widgets.get("path")
+                if widgets.get("skip"):
+                    wx.CallAfter(self.log.AppendText, f"\n⏭ Пропущен: {path}\n")
+                    self.done_duration += float(widgets.get("duration") or 0.0)
+                    continue
                 duration = float(widgets.get("duration") or 0.0)
                 gauge: wx.Gauge | None = widgets.get("gauge")
                 choice: wx.Choice | None = widgets.get("choice")
@@ -2294,6 +2319,8 @@ CBR — постоянный битрейт видео.
 
                 wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
+                self.skip_event.clear()
+                self._current_uid = uid
                 wx.CallAfter(self._set_row_widgets_enabled, widgets, False)
 
                 predicted_size = int(widgets.get("est_bytes") or 0)
@@ -2343,6 +2370,14 @@ CBR — постоянный битрейт видео.
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
                     wx.CallAfter(self.log.AppendText, "\n ✅ Конвертация завершена\n")
+                    self.done_duration += duration
+                elif self.skip_event.is_set() and not self.cancel_event.is_set():
+                    self.skip_event.clear()
+                    self._remove_partial_output(output_file)
+                    wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏭ Пропущен")
+                    self._restore_row_estimate(row, widgets, predicted_size)
+                    wx.CallAfter(gauge.SetValue, 0)
+                    wx.CallAfter(self.log.AppendText, "⏭ Файл пропущен\n")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
@@ -2614,7 +2649,7 @@ CBR — постоянный битрейт видео.
         min_time_for_estimate = max(5.0, total_duration * 0.02)
 
         for line in self.process.stderr:
-            if self.cancel_event.is_set():
+            if self.cancel_event.is_set() or self.skip_event.is_set():
                 break
 
             if self.chk_debug.GetValue():
@@ -2671,8 +2706,8 @@ CBR — постоянный битрейт видео.
                 f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed}x │ 🎞️ {current_fps} fps | ⏲ {remaining_time}{size_label}",
             )
 
-        # cancel
-        if self.cancel_event.is_set():
+        # cancel / skip
+        if self.cancel_event.is_set() or self.skip_event.is_set():
             try:
                 self.process.terminate()
                 time.sleep(0.3)
@@ -2680,7 +2715,7 @@ CBR — постоянный битрейт видео.
                 pass
 
         rc = self.process.wait() if self.process else -1
-        if self.cancel_event.is_set():
+        if self.cancel_event.is_set() or self.skip_event.is_set():
             return False
 
         if rc != 0:
@@ -2688,6 +2723,47 @@ CBR — постоянный битрейт видео.
             return False
 
         return True
+
+    # --- Skip ---
+    def skip_rows(self, rows: list[int]):
+        """Пропускает строки: текущую — прерывая ffmpeg, ожидающие — флагом для очереди."""
+        if not self.converting:
+            return
+        for row in rows:
+            widgets = self._widgets_at(row)
+            if not widgets:
+                continue
+            status = self.list.GetItem(row, self.COL_STATUS).GetText()
+            if self.row_order[row] == self._current_uid and "Конвертация" in status:
+                self.log.AppendText(f"\n⏭ Пропуск текущего файла: {widgets.get('path')}\n")
+                self.skip_event.set()
+                if self.process and self.process.poll() is None:
+                    try:
+                        self.process.terminate()
+                    except Exception:
+                        pass
+            elif status == "Ожидает" and row > self._queue_row:
+                widgets["skip"] = True
+                self.list.SetStringItem(row, self.COL_STATUS, "⏭ Пропущен")
+                self.log.AppendText(f"⏭ Будет пропущен: {widgets.get('path')}\n")
+
+    def unskip_rows(self, rows: list[int]):
+        """Возвращает в очередь строки, помеченные на пропуск, до которых очередь ещё не дошла."""
+        for row in rows:
+            widgets = self._widgets_at(row)
+            if widgets and widgets.get("skip") and row > self._queue_row:
+                widgets["skip"] = False
+                self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
+                self.log.AppendText(f"↩ Возвращён в очередь: {widgets.get('path')}\n")
+
+    def _remove_partial_output(self, output_file: str | None):
+        """Удаляет недописанный выходной файл после пропуска (фоновый поток)."""
+        if output_file and os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+                wx.CallAfter(self.log.AppendText, f"🗑 Удалён неполный файл: {os.path.basename(output_file)}\n")
+            except Exception as e:
+                wx.CallAfter(self.log.AppendText, f"⚠ Не удалось удалить {output_file}: {e}\n")
 
     # --- Cancel / close ---
     def cancel_conversion(self):
