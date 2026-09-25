@@ -21,7 +21,7 @@ from vc.settings import RowSettings, format_row_settings
 from vc.single_instance import InstanceServer
 from vc.sorting import SortingMixin
 from vc.utils import format_time, human_size
-from vc.version import __VERSION__
+from vc import __VERSION__
 from vc.widgets import CheckListCombo, FileDropTarget
 
 

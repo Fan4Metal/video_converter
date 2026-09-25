@@ -114,7 +114,7 @@ On top of the project dependencies you need [Inno Setup 6](https://jrsoftware.or
 uv run tools/make_release.py
 ```
 
-The script reads the version from `__VERSION__` in `vc/version.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `tools/setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
+The script reads the version from `__VERSION__` in `vc/__init__.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `tools/setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
 
 If you don't need the build tools, install without them:
 
@@ -125,7 +125,7 @@ uv sync --no-dev
 ### Project layout
 
 - `main.py` — entry point: single-instance check and window start-up.
-- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `utils.py`, `version.py`.
+- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `utils.py`.
 - `tools/` — `make_release.py` (release build), `setup.iss` (Inno Setup), `calibrate_estimate.py` (size-estimate calibration).
 
 ## Technical details

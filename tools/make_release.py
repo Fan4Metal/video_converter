@@ -53,9 +53,9 @@ def update_iss_version(iss_file_path, new_version):
 def main():
     os.chdir(ROOT)
     try:
-        # Шаг 1: Извлекаем версию из vc/version.py
+        # Шаг 1: Извлекаем версию из vc/__init__.py
         print("=== Извлечение версии ===")
-        version = extract_version_from_file("vc/version.py")
+        version = extract_version_from_file("vc/__init__.py")
         print(f"Найдена версия: {version}")
 
         # Шаг 2: Запускаем PyInstaller

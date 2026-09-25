@@ -112,7 +112,7 @@ uv run main.py     # запуск из исходников
 uv run tools/make_release.py
 ```
 
-Скрипт берёт версию из `__VERSION__` в `vc/version.py`, собирает `dist\VC` в режиме `--onedir` через PyInstaller, копирует русскую локализацию wxPython, подставляет версию в `tools/setup.iss` и вызывает `ISCC.exe`. Готовый установщик появится в `dist`.
+Скрипт берёт версию из `__VERSION__` в `vc/__init__.py`, собирает `dist\VC` в режиме `--onedir` через PyInstaller, копирует русскую локализацию wxPython, подставляет версию в `tools/setup.iss` и вызывает `ISCC.exe`. Готовый установщик появится в `dist`.
 
 Если сборочные инструменты не нужны, зависимости можно поставить без них:
 
@@ -123,7 +123,7 @@ uv sync --no-dev
 ### Структура проекта
 
 - `main.py` — точка входа: проверка единственного экземпляра и запуск окна.
-- `vc/` — пакет приложения: `frame.py` (главное окно), примеси окна `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, а также модули без wx — `media_probe.py` (ffprobe), `estimate.py` (прогноз размера), `single_instance.py`, `settings.py`, `utils.py`, `version.py`.
+- `vc/` — пакет приложения: `frame.py` (главное окно), примеси окна `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, а также модули без wx — `media_probe.py` (ffprobe), `estimate.py` (прогноз размера), `single_instance.py`, `settings.py`, `utils.py`.
 - `tools/` — `make_release.py` (сборка релиза), `setup.iss` (Inno Setup), `calibrate_estimate.py` (калибровка прогноза размера).
 
 ## Технические детали
