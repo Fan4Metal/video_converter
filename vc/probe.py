@@ -130,12 +130,8 @@ class ProbeMixin:
                     "tonemapping": settings.tonemapping,
                     "nvenc": self.nvenc_available,
                 }
-                wx.CallAfter(self.update_row_estimate, row)
-                wx.CallAfter(
-                    self.log.AppendText,
-                    f"   📊 Видео: {video_bps / 1e6:.2f} Мбит/с при QP={settings.quality} "
-                    f"(модель давала {model_bps / 1e6:.2f} Мбит/с)\n",
-                )
+                old_est = widgets.get("est_text") or "?"
+                wx.CallAfter(self._apply_probe_result, row, widgets, video_bps, model_bps, settings.quality, old_est)
 
             if self.probe_cancel.is_set():
                 wx.CallAfter(self.progress_label.SetLabel, "⏹ Оценка отменена")
@@ -148,6 +144,15 @@ class ProbeMixin:
             wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
             wx.CallAfter(self.progress.SetValue, 0)
             wx.CallAfter(self.enable_interface)
+
+    def _apply_probe_result(self, row: int, widgets: dict, video_bps: int, model_bps: int, qp: int, old_est: str):
+        """UI-поток: пересчитывает прогноз строки и пишет в лог замер и изменение ожидаемого размера."""
+        self.update_row_estimate(row)
+        new_est = widgets.get("est_text") or "?"
+        self.log.AppendText(
+            f"   📊 Видео: {video_bps / 1e6:.2f} Мбит/с при QP={qp} (модель давала {model_bps / 1e6:.2f} Мбит/с)\n"
+            f"   💾 Ожидаемый размер: {old_est} → {new_est}\n"
+        )
 
     def _probe_encode_segment(self, path: str, start: float, length: float, video_args: list[str], out: str) -> tuple[int, float]:
         """Кодирует фрагмент без звука; возвращает (байты видео, секунды)."""
