@@ -1,125 +1,211 @@
-"""Сборка выпуска: PyInstaller + установщик Inno Setup. Запускается из любой папки."""
+"""
+Сборка выпуска: PyInstaller (dist\\VC) + установщик Inno Setup (dist\\Video_Converter <версия> Setup.exe).
 
-import os
+Запускается из любой папки: uv run tools/make_release.py
+Вывод PyInstaller и ISCC показывается как есть, чтобы был виден ход сборки.
+"""
+
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+VERSION_FILE = ROOT / "vc" / "__init__.py"
+ISS_FILE = ROOT / "tools" / "setup.iss"
+DIST_DIR = ROOT / "dist"
+BUILD_DIR = ROOT / "build"
+APP_DIR = DIST_DIR / "VC"
+WX_LOCALE_SRC = ROOT / ".venv" / "Lib" / "site-packages" / "wx" / "locale" / "ru"
+WX_LOCALE_DST = APP_DIR / "_internal" / "wx" / "locale" / "ru"
+
+# (источник относительно корня, папка назначения внутри сборки)
+BUNDLED_DATA = [
+    ("images/favicon.png", "images"),
+    ("images/favicon.ico", "images"),
+    ("ffprobe.exe", "."),
+    ("ffmpeg.exe", "."),
+    ("mpv.exe", "."),
+    ("LICENSE", "."),
+    ("sound.wav", "."),
+]
+
+ISCC_PATHS = [
+    Path(R"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+    Path(R"C:\Program Files\Inno Setup 6\ISCC.exe"),
+]
 
 
-def run_command(command, shell=False):
-    """Запускает команду и проверяет результат"""
-    print(f"Выполняется: {command}")
-    result = subprocess.run(command, shell=shell, capture_output=True, text=True)
+class ReleaseError(Exception):
+    """Ошибка сборки с готовым для показа сообщением."""
+
+
+def human_size(num_bytes: int) -> str:
+    num = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024:
+            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
+
+
+def dir_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def fmt_cmd(command: list[str]) -> str:
+    return " ".join(f'"{c}"' if " " in c else c for c in command)
+
+
+def run_command(command: list[str], title: str) -> None:
+    """Запускает команду, показывая её вывод как есть; при ошибке прерывает сборку."""
+    print(f"$ {fmt_cmd(command)}\n")
+    started = time.monotonic()
+    result = subprocess.run(command, cwd=ROOT)
+    elapsed = time.monotonic() - started
     if result.returncode != 0:
-        print(f"Ошибка: {result.stderr}")
-        sys.exit(1)
-    print("Успешно выполнено")
-    return result
+        raise ReleaseError(f"{title}: команда завершилась с кодом {result.returncode} (за {elapsed:.0f} с)")
+    print(f"\n{title}: готово за {elapsed:.0f} с")
 
 
-def extract_version_from_file(file_path):
-    """Извлекает версию из файла Python"""
-    version_pattern = r'__VERSION__\s*=\s*["\']([^"\']+)["\']'
+class Steps:
+    """Печатает заголовки шагов и время, ушедшее на предыдущий."""
 
-    with open(file_path, "r", encoding="utf-8") as file:
-        content = file.read()
-        match = re.search(version_pattern, content)
-        if match:
-            return match.group(1)
-        else:
-            raise ValueError(f"Версия не найдена в файле {file_path}")
+    def __init__(self, total: int):
+        self.total = total
+        self.started: float | None = None
 
+    def _close(self) -> None:
+        if self.started is not None:
+            print(f"--- шаг занял {time.monotonic() - self.started:.1f} с")
 
-def update_iss_version(iss_file_path, new_version):
-    """Обновляет версию в файле Inno Setup"""
-    with open(iss_file_path, "r", encoding="utf-8") as file:
-        content = file.read()
+    def next(self, number: int, title: str) -> None:
+        self._close()
+        print(f"\n=== [{number}/{self.total}] {title} ===")
+        self.started = time.monotonic()
 
-    # Заменяем версию в определении MyAppVersion
-    old_pattern = r'#define MyAppVersion "[^"]+"'
-    new_define = f'#define MyAppVersion "{new_version}"'
-    content = re.sub(old_pattern, new_define, content)
-
-    with open(iss_file_path, "w", encoding="utf-8") as file:
-        file.write(content)
-
-    print(f"Версия в {iss_file_path} обновлена до {new_version}")
+    def finish(self) -> None:
+        self._close()
+        self.started = None
 
 
-def main():
-    os.chdir(ROOT)
+def extract_version(path: Path) -> str:
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r'__VERSION__\s*=\s*["\']([^"\']+)["\']', content)
+    if not match:
+        raise ReleaseError(f"__VERSION__ не найдена в {path}")
+    return match.group(1)
+
+
+def check_prerequisites() -> Path | None:
+    """Проверяет ресурсы для сборки и ищет ISCC. Возвращает путь к ISCC или None (поиск через PATH)."""
+    missing = [src for src, _ in BUNDLED_DATA if not (ROOT / src).is_file()]
+    if missing:
+        raise ReleaseError("не найдены файлы для сборки: " + ", ".join(missing))
+    for src, _ in BUNDLED_DATA:
+        print(f"  {src:22s} {human_size((ROOT / src).stat().st_size):>10s}")
+
+    if WX_LOCALE_SRC.is_dir():
+        print(f"  локализация wx:        {WX_LOCALE_SRC}")
+    else:
+        print(f"  ВНИМАНИЕ: локализация wx не найдена: {WX_LOCALE_SRC} (сборка продолжится без неё)")
+
+    for path in ISCC_PATHS:
+        if path.is_file():
+            print(f"  Inno Setup:            {path}")
+            return path
+    found = shutil.which("ISCC")
+    if found:
+        print(f"  Inno Setup:            {found} (через PATH)")
+        return Path(found)
+    raise ReleaseError("не найден ISCC.exe: установите Inno Setup 6 или добавьте ISCC в PATH")
+
+
+def run_pyinstaller() -> None:
+    # Пути абсолютные: spec-файл лежит в build, и относительные пути PyInstaller считал бы от него.
+    command = [
+        "uv",
+        "run",
+        "pyinstaller",
+        "--clean",
+        "--noconsole",
+        "--noconfirm",
+        "--onedir",
+        f"--specpath={BUILD_DIR}",
+        f"--icon={ROOT / 'images' / 'favicon.ico'}",
+        *(f"--add-data={ROOT / src};{dest}" for src, dest in BUNDLED_DATA),
+        "--name=VC",
+        str(ROOT / "main.py"),
+    ]
+    run_command(command, "PyInstaller")
+    if not (APP_DIR / "VC.exe").is_file():
+        raise ReleaseError(f"PyInstaller завершился, но {APP_DIR / 'VC.exe'} не найден")
+
+
+def copy_wx_locale() -> None:
+    if not WX_LOCALE_SRC.is_dir():
+        print("Локализация wx пропущена: исходная папка не найдена")
+        return
+    shutil.copytree(WX_LOCALE_SRC, WX_LOCALE_DST, dirs_exist_ok=True)
+    print(f"Локализация wx скопирована в {WX_LOCALE_DST.relative_to(ROOT)}")
+
+
+def update_iss_version(version: str) -> None:
+    content = ISS_FILE.read_text(encoding="utf-8")
+    match = re.search(r'#define MyAppVersion "([^"]+)"', content)
+    if not match:
+        raise ReleaseError(f"в {ISS_FILE} не найдено определение MyAppVersion")
+    old = match.group(1)
+    if old == version:
+        print(f"Версия в {ISS_FILE.name} уже {version}")
+        return
+    content = content.replace(match.group(0), f'#define MyAppVersion "{version}"')
+    ISS_FILE.write_text(content, encoding="utf-8")
+    print(f"Версия в {ISS_FILE.name}: {old} -> {version}")
+
+
+def main() -> int:
+    # Построчная буферизация: при перенаправлении в файл заголовки шагов идут перед выводом сборщиков.
+    sys.stdout.reconfigure(line_buffering=True)
+    total_started = time.monotonic()
+    steps = Steps(5)
     try:
-        # Шаг 1: Извлекаем версию из vc/__init__.py
-        print("=== Извлечение версии ===")
-        version = extract_version_from_file("vc/__init__.py")
-        print(f"Найдена версия: {version}")
+        steps.next(1, "Проверка")
+        version = extract_version(VERSION_FILE)
+        print(f"  версия:                {version} (из {VERSION_FILE.relative_to(ROOT)})")
+        iscc = check_prerequisites()
 
-        # Шаг 2: Запускаем PyInstaller
-        print("\n=== Запуск PyInstaller ===")
-        # Пути абсолютные: spec-файл лежит в build, и относительные пути
-        # PyInstaller считал бы от него.
-        def data(src: str, dest: str) -> str:
-            return f"--add-data={ROOT / src};{dest}"
+        steps.next(2, "PyInstaller")
+        run_pyinstaller()
 
-        pyinstaller_cmd = [
-            "uv",
-            "run",
-            "pyinstaller",
-            "--clean",
-            "--noconsole",
-            "--noconfirm",
-            "--onedir",
-            f"--specpath={ROOT / 'build'}",
-            f"--icon={ROOT / 'images' / 'favicon.ico'}",
-            data("images/favicon.png", "images"),
-            data("images/favicon.ico", "images"),
-            data("ffprobe.exe", "."),
-            data("ffmpeg.exe", "."),
-            data("mpv.exe", "."),
-            data("LICENSE", "."),
-            data("sound.wav", "."),
-            "--name=VC",
-            str(ROOT / "main.py"),
-        ]
-        run_command(pyinstaller_cmd)
+        steps.next(3, "Локализация wxPython")
+        copy_wx_locale()
 
-        try:
-            shutil.copytree(R".venv\Lib\site-packages\wx\locale\ru", R"dist\VC\_internal\wx\locale\ru")
-        except Exception as e:
-            print(f"Ошибка копирования локализации wx: {e}")
+        steps.next(4, "Версия в Inno Setup")
+        update_iss_version(version)
 
-        # Шаг 3: Обновляем версию в setup.iss
-        print("\n=== Обновление версии в Inno Setup ===")
-        update_iss_version("tools\\setup.iss", version)
+        steps.next(5, "Установщик Inno Setup")
+        run_command([str(iscc), str(ISS_FILE)], "ISCC")
+        installer = DIST_DIR / f"Video_Converter {version} Setup.exe"
+        if not installer.is_file():
+            raise ReleaseError(f"ISCC завершился, но установщик не найден: {installer}")
+        steps.finish()
 
-        # Шаг 4: Компилируем установщик Inno Setup
-        print("\n=== Компиляция установщика ===")
-        # Путь к компилятору Inno Setup (может потребоваться изменить)
-        iscc_paths = [R"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", R"C:\Program Files\Inno Setup 6\ISCC.exe"]
+    except ReleaseError as e:
+        print(f"\nОШИБКА: сборка прервана: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nОШИБКА: сборка прервана пользователем", file=sys.stderr)
+        return 1
 
-        iscc_found = False
-        for iscc_path in iscc_paths:
-            if Path(iscc_path).exists():
-                iscc_cmd = [iscc_path, "tools\\setup.iss"]
-                run_command(iscc_cmd)
-                iscc_found = True
-                break
-
-        if not iscc_found:
-            # Если не нашли ISCC в стандартных путях, используем команду напрямую
-            print("ISCC не найден в стандартных путях, пытаемся запустить через PATH...")
-            run_command(["ISCC", "tools\\setup.iss"])
-
-        print(f"\n=== Выпуск версии {version} успешно создан! ===")
-
-    except Exception as e:
-        print(f"Ошибка при создании выпуска: {e}")
-        sys.exit(1)
+    minutes, seconds = divmod(int(time.monotonic() - total_started), 60)
+    print(f"\n=== Выпуск {version} собран за {minutes} мин {seconds} с ===")
+    print(f"  сборка:      {APP_DIR}  ({human_size(dir_size(APP_DIR))})")
+    print(f"  установщик:  {installer}  ({human_size(installer.stat().st_size)})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
