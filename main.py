@@ -2,6 +2,7 @@ import ctypes
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,37 @@ if sys.platform.startswith("win"):
     except Exception:
         pass
 
-__VERSION__ = "0.3.4"
+__VERSION__ = "0.3.5 beta 1" 
+
+# --- Единственный экземпляр приложения ---
+# Проводник запускает отдельный процесс на каждый выделенный файл. Первый
+# процесс открывает окно и слушает локальный сокет, остальные пересылают ему
+# свои пути и завершаются. Номер порта хранится в файле во временной папке.
+INSTANCE_NAME = "video_converter_single_instance"
+INSTANCE_PORT_FILE = os.path.join(tempfile.gettempdir(), "video_converter.port")
+INSTANCE_ACK = b"VC_OK"
+
+
+def send_paths_to_running_instance(paths: list[str], timeout: float = 15.0) -> bool:
+    """
+    Пересылает пути уже запущенному окну. Пустой список просто поднимает окно.
+    Повторяет попытки, пока первый экземпляр запускается и ещё не открыл сокет.
+    """
+    deadline = time.monotonic() + timeout
+    payload = ("\n".join(paths) + "\n").encode("utf-8")
+    while time.monotonic() < deadline:
+        try:
+            with open(INSTANCE_PORT_FILE, encoding="utf-8") as f:
+                port = int(f.read().strip())
+            with socket.create_connection(("127.0.0.1", port), timeout=3) as conn:
+                conn.sendall(payload)
+                conn.shutdown(socket.SHUT_WR)
+                if conn.recv(len(INSTANCE_ACK)) == INSTANCE_ACK:
+                    return True
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.2)
+    return False
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -897,6 +928,7 @@ class VideoConverter(wx.Frame):
         self.converting = False
         self.process: subprocess.Popen | None = None
         self.cancel_event = threading.Event()
+        self._instance_server: socket.socket | None = None
         # Контрольная кодировка (оценка размера по фрагментам)
         self.probing = False
         self.probe_process: subprocess.Popen | None = None
@@ -1173,13 +1205,50 @@ CBR — постоянный битрейт видео.
     def add_files(self, paths: list[str]):
         # ffprobe-анализ медленный — выполняем его в фоне, чтобы не блокировать UI.
         # Виджеты строк и лог создаются в UI-потоке через wx.CallAfter.
-        if self.converting:
-            self.log.AppendText("\n⚠ Нельзя добавлять файлы во время конвертации.\n")
-            return
+        # Во время конвертации файлы тоже добавляются: строка встаёт в конец
+        # списка, и очередь подхватывает её после текущих.
         valid_paths = [p for p in paths if p and os.path.isfile(p)]
         if not valid_paths:
             return
         threading.Thread(target=self._probe_files_worker, args=(valid_paths,), daemon=True).start()
+
+    # --- Единственный экземпляр: приём файлов от других процессов ---
+    def start_instance_server(self):
+        """Открывает локальный сокет, через который другие копии передают пути."""
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        with open(INSTANCE_PORT_FILE, "w", encoding="utf-8") as f:
+            f.write(str(server.getsockname()[1]))
+        self._instance_server = server
+        threading.Thread(target=self._instance_server_loop, args=(server,), daemon=True).start()
+
+    def _instance_server_loop(self, server: socket.socket):
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return  # сокет закрыт при выходе
+            with conn:
+                try:
+                    conn.settimeout(5)
+                    chunks = []
+                    while chunk := conn.recv(65536):
+                        chunks.append(chunk)
+                    paths = [p for p in b"".join(chunks).decode("utf-8").splitlines() if p]
+                    conn.sendall(INSTANCE_ACK)
+                except OSError:
+                    continue
+            wx.CallAfter(self.add_files_from_shell, paths)
+
+    def add_files_from_shell(self, paths: list[str]):
+        """Поднимает окно и добавляет файлы, пришедшие из командной строки."""
+        if self.IsIconized():
+            self.Iconize(False)
+        self.Raise()
+        self.RequestUserAttention()
+        if paths:
+            self.add_files(paths)
 
     def _probe_files_worker(self, paths: list[str]):
         """Фоновый поток: анализирует файлы ffprobe и передаёт результат в UI-поток."""
@@ -1933,6 +2002,9 @@ CBR — постоянный битрейт видео.
         self._schedule_progress_fit()
         if self.chk_save_subtitles.GetValue():
             self.create_subtitle_widget(row)
+        if self.converting:
+            # Строка добавлена во время конвертации: очередь подхватит её сама.
+            self.all_jobs_duration += float(duration or 0.0)
 
     def create_subtitle_widget(self, row: int):
         widgets = self._widgets_at(row)
@@ -2181,9 +2253,13 @@ CBR — постоянный битрейт видео.
     def queue_worker(self):
         self.current_output_file = None
         try:
-            # Снимок порядка строк (uid) на момент старта; во время конвертации
-            # добавление/удаление строк заблокировано, поэтому индексы стабильны.
-            for row, uid in enumerate(list(self.row_order)):
+            # Обход по индексу без снимка: во время конвертации удаление и
+            # сортировка заблокированы, а новые строки добавляются только в конец
+            # и подхватываются очередью.
+            row = -1
+            while row + 1 < len(self.row_order):
+                row += 1
+                uid = self.row_order[row]
                 if self.cancel_event.is_set():
                     break
 
@@ -2218,6 +2294,7 @@ CBR — постоянный битрейт видео.
 
                 wx.CallAfter(self.log.AppendText, f"\n{'-' * 30}\nНачало конвертации...\n🎬 Файл: {path}\n➡ Выход: {output_file}\n")
                 self.current_output_file = output_file
+                wx.CallAfter(self._set_row_widgets_enabled, widgets, False)
 
                 predicted_size = int(widgets.get("est_bytes") or 0)
                 if predicted_size:
@@ -2660,12 +2737,17 @@ CBR — постоянный битрейт видео.
                 event.Veto()
                 return
             self.cancel_conversion()
+        if self._instance_server is not None:
+            self._instance_server.close()
+            try:
+                os.remove(INSTANCE_PORT_FILE)
+            except OSError:
+                pass
         self.Destroy()
 
     def _conversion_locked_controls(self) -> list:
         """Элементы управления, которые должны блокироваться на время конвертации."""
         return [
-            self.btn_add,
             self.btn_remove,
             self.btn_clear,
             self.qp_slider,
@@ -2683,18 +2765,24 @@ CBR — постоянный битрейт видео.
             self.chk_copy_tags,
         ]
 
+    @staticmethod
+    def _set_row_widgets_enabled(widgets: dict, enabled: bool):
+        """Блокирует/разблокирует виджеты выбора дорожек одной строки."""
+        for key in ("choice", "subtitles"):
+            ctrl = widgets.get(key)
+            if ctrl:
+                ctrl.Enable(enabled)
+
     def _set_rows_enabled(self, enabled: bool):
-        """Блокирует/разблокирует виджеты выбора дорожек в строках списка."""
+        """Блокирует/разблокирует виджеты выбора дорожек во всех строках списка."""
         for widgets in self.row_widgets.values():
-            for key in ("choice", "subtitles"):
-                ctrl = widgets.get(key)
-                if ctrl:
-                    ctrl.Enable(enabled)
+            self._set_row_widgets_enabled(widgets, enabled)
 
     def disable_interface(self):
+        # Строки не блокируем: у ожидающих строк дорожки можно менять до их старта,
+        # очередь читает выбор в момент начала конвертации строки.
         for ctrl in self._conversion_locked_controls():
             ctrl.Disable()
-        self._set_rows_enabled(False)
 
     def enable_interface(self):
         for ctrl in self._conversion_locked_controls():
@@ -2840,5 +2928,13 @@ CBR — постоянный битрейт видео.
 
 if __name__ == "__main__":
     app = wx.App()
+    cli_paths = [os.path.abspath(p) for p in sys.argv[1:] if os.path.isfile(p)]
+    # Объект должен жить всё время работы приложения — он удерживает мьютекс.
+    app.instance_checker = wx.SingleInstanceChecker(INSTANCE_NAME)
+    if app.instance_checker.IsAnotherRunning() and send_paths_to_running_instance(cli_paths):
+        sys.exit(0)
     top = VideoConverter()
+    top.start_instance_server()
+    if cli_paths:
+        wx.CallAfter(top.add_files, cli_paths)
     app.MainLoop()

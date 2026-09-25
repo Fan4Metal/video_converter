@@ -1,5 +1,5 @@
 #define MyAppName "Video Converter"
-#define MyAppVersion "0.3.4"
+#define MyAppVersion "0.3.5 beta 1"
 #define VersionInfoVersion "0.1.0.0"
 #define MyAppPublisher "Vanyunin Alexander"
 
@@ -31,9 +31,44 @@ Name: "{group}\Video Converter"; Filename: "{app}\VC.exe"
 Name: "{autodesktop}\Video Converter"; Filename: "{app}\VC.exe"
 
 
+[Tasks]
+Name: "contextmenu"; Description: "{cm:ContextMenuTask}"; GroupDescription: "{cm:ContextMenuGroup}"
+
+[CustomMessages]
+english.ContextMenuGroup=Explorer integration:
+russian.ContextMenuGroup=Интеграция с Проводником:
+english.ContextMenuTask=Add the "Convert" item to the context menu of video files (MKV, MP4, MOV, AVI)
+russian.ContextMenuTask=Добавить пункт «Сконвертировать» в контекстное меню видеофайлов (MKV, MP4, MOV, AVI)
+english.ContextMenuVerb=Convert
+russian.ContextMenuVerb=Сконвертировать
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
 Source: ".\dist\VC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+; Пункт контекстного меню Проводника для видеофайлов. Ключи в HKCU, т.к. установка без прав администратора.
+; MultiSelectModel=Player снимает ограничение Проводника в 15 выделенных файлов.
+; Проводник запускает VC.exe отдельно для каждого файла; приложение само собирает их в одно окно.
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
