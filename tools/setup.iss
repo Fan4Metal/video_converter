@@ -13,10 +13,10 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={userappdata}\video_converter
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
-OutputDir=.\dist
-SetupIconFile=.\images\favicon.ico
+OutputDir=..\dist
+SetupIconFile=..\images\favicon.ico
 UninstallDisplayIcon={app}\VC.exe
-LicenseFile=.\LICENSE
+LicenseFile=..\LICENSE
 OutputBaseFilename=Video_Converter {#MyAppVersion} Setup
 Compression=lzma
 SolidCompression=yes
@@ -47,7 +47,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
-Source: ".\dist\VC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\VC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Registry]
 ; Пункт контекстного меню Проводника для видеофайлов. Ключи в HKCU, т.к. установка без прав администратора.

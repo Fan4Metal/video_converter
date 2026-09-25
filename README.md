@@ -99,7 +99,7 @@ uv run main.py     # запуск из исходников
 - [FFmpeg для Windows](https://ffmpeg.org/download.html#build-windows) — `ffmpeg.exe` и `ffprobe.exe`;
 - [mpv для Windows](https://mpv.io/installation/) — `mpv.exe`.
 
-Без них программа не запустится из исходников, а `make_release.py` не соберёт установщик: PyInstaller включает эти файлы в сборку через `--add-data`, и оттуда они попадают в установщик Inno Setup. Аналогично собираются `LICENSE`, `sound.wav` и иконки.
+Без них программа не запустится из исходников, а `tools/make_release.py` не соберёт установщик: PyInstaller включает эти файлы в сборку через `--add-data`, и оттуда они попадают в установщик Inno Setup. Аналогично собираются `LICENSE`, `sound.wav` и иконки.
 
 Лицензии всех включённых в сборку компонентов перечислены в файле [LICENSE](LICENSE) — он показывается в установщике и в окне «О программе».
 
@@ -108,16 +108,22 @@ uv run main.py     # запуск из исходников
 Помимо зависимостей проекта понадобится установленный [Inno Setup 6](https://jrsoftware.org/isdl.php) — им собирается установщик. Скрипт ищет компилятор `ISCC.exe` в стандартных путях (`C:\Program Files (x86)\Inno Setup 6` и `C:\Program Files\Inno Setup 6`), а если не находит — пробует вызвать его через `PATH`.
 
 ```bash
-uv run make_release.py
+uv run tools/make_release.py
 ```
 
-Скрипт берёт версию из `__VERSION__` в `main.py`, собирает `dist\VC` в режиме `--onedir` через PyInstaller, копирует русскую локализацию wxPython, подставляет версию в `setup.iss` и вызывает `ISCC.exe`. Готовый установщик появится в `dist`.
+Скрипт берёт версию из `__VERSION__` в `vc/version.py`, собирает `dist\VC` в режиме `--onedir` через PyInstaller, копирует русскую локализацию wxPython, подставляет версию в `tools/setup.iss` и вызывает `ISCC.exe`. Готовый установщик появится в `dist`.
 
 Если сборочные инструменты не нужны, зависимости можно поставить без них:
 
 ```bash
 uv sync --no-dev
 ```
+
+### Структура проекта
+
+- `main.py` — точка входа: проверка единственного экземпляра и запуск окна.
+- `vc/` — пакет приложения: `frame.py` (главное окно), примеси окна `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, а также модули без wx — `media_probe.py` (ffprobe), `estimate.py` (прогноз размера), `single_instance.py`, `settings.py`, `utils.py`, `version.py`.
+- `tools/` — `make_release.py` (сборка релиза), `setup.iss` (Inno Setup), `calibrate_estimate.py` (калибровка прогноза размера).
 
 ## Технические детали
 

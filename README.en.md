@@ -101,7 +101,7 @@ uv run main.py     # run from source
 - [FFmpeg for Windows](https://ffmpeg.org/download.html#build-windows) — `ffmpeg.exe` and `ffprobe.exe`;
 - [mpv for Windows](https://mpv.io/installation/) — `mpv.exe`.
 
-Without them the app won't start from source and `make_release.py` won't produce an installer: PyInstaller pulls these files into the build via `--add-data`, and from there they end up in the Inno Setup installer. `LICENSE`, `sound.wav` and the icons are bundled the same way.
+Without them the app won't start from source and `tools/make_release.py` won't produce an installer: PyInstaller pulls these files into the build via `--add-data`, and from there they end up in the Inno Setup installer. `LICENSE`, `sound.wav` and the icons are bundled the same way.
 
 The licenses of every bundled component are listed in the [LICENSE](LICENSE) file, which is shown by the installer and in the About dialog.
 
@@ -110,16 +110,22 @@ The licenses of every bundled component are listed in the [LICENSE](LICENSE) fil
 On top of the project dependencies you need [Inno Setup 6](https://jrsoftware.org/isdl.php) installed — it builds the installer. The script looks for the `ISCC.exe` compiler in the standard locations (`C:\Program Files (x86)\Inno Setup 6` and `C:\Program Files\Inno Setup 6`) and falls back to calling it through `PATH`.
 
 ```bash
-uv run make_release.py
+uv run tools/make_release.py
 ```
 
-The script reads the version from `__VERSION__` in `main.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
+The script reads the version from `__VERSION__` in `vc/version.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `tools/setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
 
 If you don't need the build tools, install without them:
 
 ```bash
 uv sync --no-dev
 ```
+
+### Project layout
+
+- `main.py` — entry point: single-instance check and window start-up.
+- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `utils.py`, `version.py`.
+- `tools/` — `make_release.py` (release build), `setup.iss` (Inno Setup), `calibrate_estimate.py` (size-estimate calibration).
 
 ## Technical details
 

@@ -1,8 +1,13 @@
+"""Сборка выпуска: PyInstaller + установщик Inno Setup. Запускается из любой папки."""
+
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-import shutil
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_command(command, shell=False):
@@ -46,14 +51,20 @@ def update_iss_version(iss_file_path, new_version):
 
 
 def main():
+    os.chdir(ROOT)
     try:
-        # Шаг 1: Извлекаем версию из main.py
+        # Шаг 1: Извлекаем версию из vc/version.py
         print("=== Извлечение версии ===")
-        version = extract_version_from_file("main.py")
+        version = extract_version_from_file("vc/version.py")
         print(f"Найдена версия: {version}")
 
         # Шаг 2: Запускаем PyInstaller
         print("\n=== Запуск PyInstaller ===")
+        # Пути абсолютные: spec-файл лежит в build, и относительные пути
+        # PyInstaller считал бы от него.
+        def data(src: str, dest: str) -> str:
+            return f"--add-data={ROOT / src};{dest}"
+
         pyinstaller_cmd = [
             "uv",
             "run",
@@ -62,16 +73,17 @@ def main():
             "--noconsole",
             "--noconfirm",
             "--onedir",
-            "--icon=.\\images\\favicon.ico",
-            "--add-data=images\\favicon.png;.\\images",
-            "--add-data=images\\favicon.ico;.\\images",
-            "--add-data=ffprobe.exe;.",
-            "--add-data=ffmpeg.exe;.",
-            "--add-data=mpv.exe;.",
-            "--add-data=LICENSE;.",
-            "--add-data=sound.wav;.",
+            f"--specpath={ROOT / 'build'}",
+            f"--icon={ROOT / 'images' / 'favicon.ico'}",
+            data("images/favicon.png", "images"),
+            data("images/favicon.ico", "images"),
+            data("ffprobe.exe", "."),
+            data("ffmpeg.exe", "."),
+            data("mpv.exe", "."),
+            data("LICENSE", "."),
+            data("sound.wav", "."),
             "--name=VC",
-            "main.py",
+            str(ROOT / "main.py"),
         ]
         run_command(pyinstaller_cmd)
 
@@ -82,7 +94,7 @@ def main():
 
         # Шаг 3: Обновляем версию в setup.iss
         print("\n=== Обновление версии в Inno Setup ===")
-        update_iss_version(".\\setup.iss", version)
+        update_iss_version("tools\\setup.iss", version)
 
         # Шаг 4: Компилируем установщик Inno Setup
         print("\n=== Компиляция установщика ===")
@@ -92,7 +104,7 @@ def main():
         iscc_found = False
         for iscc_path in iscc_paths:
             if Path(iscc_path).exists():
-                iscc_cmd = [iscc_path, ".\\setup.iss"]
+                iscc_cmd = [iscc_path, "tools\\setup.iss"]
                 run_command(iscc_cmd)
                 iscc_found = True
                 break
@@ -100,7 +112,7 @@ def main():
         if not iscc_found:
             # Если не нашли ISCC в стандартных путях, используем команду напрямую
             print("ISCC не найден в стандартных путях, пытаемся запустить через PATH...")
-            run_command(["ISCC", ".\\setup.iss"])
+            run_command(["ISCC", "tools\\setup.iss"])
 
         print(f"\n=== Выпуск версии {version} успешно создан! ===")
 

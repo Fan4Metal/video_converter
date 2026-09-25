@@ -1,13 +1,13 @@
 """
-Калибровка прогноза размера (estimate_qp_video_bitrate_bps в main.py).
+Калибровка прогноза размера (estimate_qp_video_bitrate_bps в vc/estimate.py).
 
 Из каждого файла вырезаются несколько фрагментов, кодируются теми же
 аргументами h264_nvenc, что и в приложении, при нескольких значениях QP,
 и измеренный битрейт сравнивается с прогнозом текущей модели.
 
 Использование:
-    python calibrate_estimate.py <файл или папка> [...]
-    python calibrate_estimate.py --report          # только отчёт по calibrate_estimate.json
+    python tools/calibrate_estimate.py <файл или папка> [...]
+    python tools/calibrate_estimate.py --report          # только отчёт по calibrate_estimate.json
 
 Результаты накапливаются в calibrate_estimate.json рядом со скриптом.
 """
@@ -20,8 +20,10 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FFMPEG = os.path.join(HERE, "ffmpeg.exe")
-FFPROBE = os.path.join(HERE, "ffprobe.exe")
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)  # для импорта пакета vc
+FFMPEG = os.path.join(ROOT, "ffmpeg.exe")
+FFPROBE = os.path.join(ROOT, "ffprobe.exe")
 RESULTS = os.path.join(HERE, "calibrate_estimate.json")
 
 QPS = [16, 19, 22, 25, 28, 32]
@@ -41,7 +43,7 @@ def probe(path: str) -> dict:
 
 
 def nvenc_args(qp: int) -> list[str]:
-    # Должно совпадать с _build_video_args в main.py.
+    # Должно совпадать с _build_video_args в vc/conversion.py.
     return [
         "-pix_fmt", "yuv420p", "-vf", "format=yuv420p",
         "-c:v", "h264_nvenc", "-preset", "p4",
@@ -103,7 +105,7 @@ def calibrate(path: str) -> dict | None:
 
 def report(records: list[dict]) -> None:
     sys.argv = sys.argv[:1]
-    from main import estimate_qp_video_bitrate_bps
+    from vc.estimate import estimate_qp_video_bitrate_bps
 
     errs, errs22 = [], []
     print(f"\n{'файл':40s} qp: прогноз/факт, Мбит/с")
