@@ -12,7 +12,8 @@ The app is designed for batch work: a file list, shared encoding settings in the
 
 ## Features
 
-- **Batch conversion** of a file queue with both overall and per-row progress.
+- **Batch conversion** of a file queue with both overall and per-row progress. Files can be added while a conversion is running — they are appended to the queue; any queued file can be skipped.
+- **"Convert" item in the Explorer context menu** for MKV, MP4, MOV and AVI files: the selected files (several at once, too) are sent to the already open app window. The item is registered by an option in the installer.
 - **NVENC hardware encoding** (`h264_nvenc`, preset `p4`, profile `high`, `spatial_aq`). If NVENC is unavailable, the app falls back to the `libx264` software encoder — slower, same output format.
 - **Two rate-control modes:** constant quality (QP/CRF, range 14–30) and constant bitrate (CBR).
 - **Output size prediction** before the conversion starts — the "Expected size" column.
@@ -23,7 +24,7 @@ The app is designed for batch work: a file list, shared encoding settings in the
 - **"Don't convert" modes** for video and audio separately (stream copy, `-c:v copy` / `-c:a copy`).
 - **Tag copying** from the source MP4 to the result (via `mutagen`).
 - **Preview** of the source or converted file in the bundled mpv, using the selected audio track.
-- **Drag & drop**, sortable columns, context menu, FFmpeg log with a Debug mode.
+- **Drag & drop**, rubber-band row selection, sortable columns, context menu, FFmpeg log with a Debug mode.
 - **HiDPI support**, sound notification when the queue finishes.
 
 Input formats: MKV, MP4, MOV, AVI. Output format: MP4 (H.264 + AAC).
@@ -32,11 +33,13 @@ Input formats: MKV, MP4, MOV, AVI. Output format: MP4 (H.264 + AAC).
 
 Download `Video_Converter <version> Setup.exe` from [Releases](https://github.com/Fan4Metal/video_converter/releases) and run it. The app installs into the user profile (`%APPDATA%\video_converter`) and does not require administrator rights.
 
+The setup wizard offers the option "Add the 'Convert' item to the context menu of video files". When selected, MKV, MP4, MOV and AVI files get the corresponding Explorer context menu item; the entries are written to `HKEY_CURRENT_USER` and removed on uninstall.
+
 Requirements: Windows 10/11 x64. For hardware acceleration — an NVIDIA GPU with NVENC support and a current driver; without one the app runs on the CPU.
 
 ## Usage
 
-1. Add files with **"Добавить файлы..."** (Add files) or drop them onto the window.
+1. Add files with **"Добавить файлы..."** (Add files), drop them onto the window, or use the **"Convert"** item in the Explorer context menu. Files can also be added while a conversion is running — they are appended to the queue.
 2. Optionally pick a destination folder (**"Выбрать папку..."**). With no folder set, output files are written next to the sources. The path is remembered between runs.
 3. The **`_conv`** toggle controls whether a suffix is appended to the output file name. If a file with that name already exists, a number is added.
 4. Choose the rate-control mode and quality, tick the options you need.
@@ -75,8 +78,10 @@ Click a header to sort, click again to reverse the direction. The subtitle colum
 ### Working with the list
 
 - **Double click** — preview the file in mpv with the selected audio track.
+- **Mouse drag** — rubber-band selection of rows; with Ctrl held the band adds rows to the current selection.
 - **Delete** — remove the selected rows.
-- **Right click** — context menu: play the source or the converted file, apply settings to other files, reset conversion settings, open the source or output folder, remove from the list, clear the list.
+- **Right click** — context menu: play the source or the converted file, apply settings to other files, estimate size with a test encode, skip a file during conversion (or return it to the queue), reset conversion settings, open the source or output folder, remove from the list, clear the list.
+- **Skipping during conversion:** for the file being encoded, encoding is aborted, the partial output is deleted and the queue moves on to the next file; a waiting file is marked and skipped when the queue reaches it. The queue itself keeps running.
 
 ## Building from source
 
@@ -124,6 +129,8 @@ uv sync --no-dev
 - Container metadata (`-map_metadata -1`) and embedded EIA-608/CEA-608 closed captions (`-bsf:v filter_units=remove_types=6`) are stripped from the output.
 - File information is collected with a single `ffprobe` call when a file is added, then cached.
 - The destination folder path is stored in the registry under `HKEY_CURRENT_USER\SOFTWARE\video_converter`.
+- The app runs as a single instance: a second launch (including one from the Explorer context menu) hands its paths to the already open window over a local socket and exits. Explorer starts a separate process for every selected file, which is how all of them end up in one window.
+- The context menu item is registered by the installer under `HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\<.ext>\shell\VideoConverter` with `MultiSelectModel=Player`, which lifts Explorer's 15-item selection limit.
 
 ## License
 
