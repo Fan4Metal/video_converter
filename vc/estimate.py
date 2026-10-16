@@ -1,6 +1,7 @@
 """Прогноз размера выходного файла."""
 from vc.ffmpeg_tools import get_audio_bitrate_kbps
-from vc.settings import RowSettings
+from vc.media_probe import display_dimensions
+from vc.settings import RowSettings, target_resolution
 from vc.utils import human_size, to_int
 # --- Прогноз размера выходного файла ---
 # Константы откалиброваны на реальных файлах (8 источников 1080p/720p, QP 16–32,
@@ -69,7 +70,7 @@ def source_video_bitrate_bps(info: dict) -> int:
     return max(total - audio_total, 0)
 
 
-def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: bool = False) -> int:
+def estimate_qp_video_bitrate_bps(info: dict, qp: int, max_res: int, nvenc: bool = False) -> int:
     """
     Грубая оценка битрейта видео в режиме постоянного качества.
 
@@ -79,8 +80,7 @@ def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: b
     и упирается в потолок NVENC. Для libx264 результат делится на
     EST_NVENC_BITRATE_FACTOR. Возвращает 0, если разрешение неизвестно.
     """
-    w = to_int(info.get("width"))
-    h = to_int(info.get("height"))
+    w, h = display_dimensions(info)
     if w <= 0 or h <= 0:
         return 0
 
@@ -92,11 +92,7 @@ def estimate_qp_video_bitrate_bps(info: dict, qp: int, limit_res: bool, nvenc: b
         fps = 25.0
 
     src_pixel_rate = w * h * fps
-    # Тот же порог понижения разрешения, что и в _build_video_args.
-    if limit_res and (w > 1920 or h > 1080):
-        scale = min(1920 / w, 1080 / h, 1.0)
-        w = int(w * scale)
-        h = int(h * scale)
+    w, h = target_resolution(w, h, max_res)
     pixel_rate = w * h * fps
 
     pixel_model = EST_BITS_PER_PIXEL_QP22 * pixel_rate
@@ -127,7 +123,7 @@ def probe_video_bitrate_bps(probe: dict | None, eff: RowSettings, nvenc: bool) -
     """
     if not probe or to_int(probe.get("video_bps")) <= 0:
         return 0
-    if bool(probe.get("limit_res")) != bool(eff.limit_res) or to_int(probe.get("tonemapping")) != to_int(eff.tonemapping):
+    if to_int(probe.get("max_res")) != to_int(eff.max_res) or to_int(probe.get("tonemapping")) != to_int(eff.tonemapping):
         return 0
     if bool(probe.get("nvenc")) != bool(nvenc):
         return 0
@@ -174,7 +170,7 @@ def estimate_output_size(
             # Замер при другом QP пересчитан по модели — уже не точный.
             rough = to_int(probe.get("qp"), 22) != to_int(eff.quality, 22)
         else:
-            video_bps = estimate_qp_video_bitrate_bps(info, eff.quality, eff.limit_res, nvenc)
+            video_bps = estimate_qp_video_bitrate_bps(info, eff.quality, eff.max_res, nvenc)
             rough = True
 
     if video_bps <= 0:

@@ -115,7 +115,7 @@ def report(records: list[dict]) -> None:
         for qp, actual in sorted((int(k), v) for k, v in r["qp"].items()):
             if actual <= 0:
                 continue
-            pred = estimate_qp_video_bitrate_bps(info, qp, True, True)
+            pred = estimate_qp_video_bitrate_bps(info, qp, 0, True)
             e = abs(math.log(pred / actual))
             errs.append(e)
             if qp == 22:

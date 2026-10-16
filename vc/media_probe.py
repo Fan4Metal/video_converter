@@ -250,6 +250,7 @@ def parse_video_info(probe: dict) -> dict:
         "codec": "?",
         "width": "?",
         "height": "?",
+        "rotation": 0,
         "fps": "?",
         "aspect": "?",
         "bitrate": "?",
@@ -270,6 +271,7 @@ def parse_video_info(probe: dict) -> dict:
     info["codec"] = stream.get("codec_name", "?")
     info["width"] = stream.get("width", "?")
     info["height"] = stream.get("height", "?")
+    info["rotation"] = parse_rotation(stream)
     info["aspect"] = stream.get("display_aspect_ratio", "?")
     info["size"] = int(fmt.get("size") or 0)
 
@@ -315,6 +317,26 @@ def parse_video_info(probe: dict) -> dict:
     info["requires_tonemap"] = bool(hdr["requires_tonemap"])
 
     return info
+
+
+def parse_rotation(stream: dict) -> int:
+    """Угол поворота кадра при показе (метка с телефона): из Display Matrix или старого тега rotate."""
+    for side_data in stream.get("side_data_list") or []:
+        if "rotation" in side_data:
+            return to_int(side_data.get("rotation"))
+    return to_int((stream.get("tags") or {}).get("rotate"))
+
+
+def display_dimensions(info: dict) -> tuple[int, int]:
+    """
+    Размер кадра так, как его показывает плеер и получает фильтр ffmpeg (ffmpeg
+    поворачивает кадр по метке): при повороте на 90°/270° ширина и высота
+    меняются местами. (0, 0), если размер неизвестен.
+    """
+    w, h = to_int(info.get("width")), to_int(info.get("height"))
+    if abs(to_int(info.get("rotation"))) % 180 == 90:
+        w, h = h, w
+    return w, h
 
 
 def get_video_info(filepath: str) -> dict:

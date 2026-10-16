@@ -10,9 +10,9 @@ import winsound
 import wx
 
 from vc.ffmpeg_tools import get_audio_bitrate
-from vc.media_probe import get_audio_channels, get_hdr_info, get_video_info
+from vc.media_probe import display_dimensions, get_audio_channels, get_hdr_info, get_video_info
 from vc.resources import FFMPEG_PATH, get_resource_path
-from vc.settings import RowSettings
+from vc.settings import RESOLUTION_LIMITS, RowSettings, resolution_filter, target_resolution
 from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
 from vc.widgets import CheckListCombo
 
@@ -274,7 +274,7 @@ class ConversionMixin:
         skip_video: bool,
         encode_mode: int,
         qp_slider: int,
-        limit_res: bool,
+        max_res: int,
         tonemap_mode: int,
     ) -> list[str]:
         """
@@ -304,21 +304,16 @@ class ConversionMixin:
         wx.CallAfter(self.log.AppendText, f"🎨 Видео: {hdr_type}, tonemap={'on' if needs_tonemap else 'off'}\n")
 
         scale_filter = ""
-        if limit_res:
-            try:
-                w = int(video_info.get("width") or 0)
-                h = int(video_info.get("height") or 0)
-            except Exception:
-                w, h = 0, 0
+        if max_res in RESOLUTION_LIMITS:
+            w, h = display_dimensions(video_info)
             if not (w and h):
-                vinfo = get_video_info(input_path)
-                try:
-                    w = int(vinfo.get("width") or 0)
-                    h = int(vinfo.get("height") or 0)
-                except Exception:
-                    w, h = 0, 0
-            if w > 1920 or h > 1080:
-                scale_filter = ",scale='if(gt(iw,1920),1920,iw):if(gt(ih,1080),1080,ih):force_original_aspect_ratio=decrease'"
+                w, h = display_dimensions(get_video_info(input_path))
+            target = target_resolution(w, h, max_res)
+            # Размер неизвестен — ставим фильтр: он сам ничего не меняет, если кадр помещается.
+            if not (w and h) or target != (w, h):
+                scale_filter = f",{resolution_filter(max_res)}"
+                if w and h:
+                    wx.CallAfter(self.log.AppendText, f"📐 Разрешение: {w}×{h} → {target[0]}×{target[1]}\n")
 
         if needs_tonemap:
             vf_filter = (
@@ -399,7 +394,7 @@ class ConversionMixin:
             skip_video=eff.skip_video,
             encode_mode=eff.encode_mode,
             qp_slider=eff.quality,
-            limit_res=eff.limit_res,
+            max_res=eff.max_res,
             tonemap_mode=eff.tonemapping,
         )
 

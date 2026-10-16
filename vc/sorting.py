@@ -102,6 +102,7 @@ class SortingMixin:
             "extra": extra,
             "col_file": self.list.GetItem(row, self.COL_FILE).GetText(),
             "col_res": self.list.GetItem(row, self.COL_RES).GetText(),
+            "col_res_tooltip": self.list.GetItem(row, self.COL_RES).GetToolTip(),
             "col_br": self.list.GetItem(row, self.COL_BR).GetText(),
             "col_size": self.list.GetItem(row, self.COL_SIZE).GetText(),
             "col_est": self.list.GetItem(row, self.COL_EST).GetText(),
@@ -130,6 +131,7 @@ class SortingMixin:
             row = self.list.GetItemCount()
             self.list.InsertStringItem(row, s["col_file"])
             self.list.SetStringItem(row, self.COL_RES, s["col_res"])
+            self._set_cell_tooltip(row, self.COL_RES, s["col_res_tooltip"] or "")
             self.list.SetStringItem(row, self.COL_BR, s["col_br"])
             self.list.SetStringItem(row, self.COL_TIME, s["col_time"])
             self.list.SetStringItem(row, self.COL_SIZE, s["col_size"])

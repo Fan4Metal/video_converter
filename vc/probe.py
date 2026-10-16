@@ -82,7 +82,7 @@ class ProbeMixin:
                     skip_video=False,
                     encode_mode=0,
                     qp_slider=settings.quality,
-                    limit_res=settings.limit_res,
+                    max_res=settings.max_res,
                     tonemap_mode=settings.tonemapping,
                 )
 
@@ -121,12 +121,12 @@ class ProbeMixin:
 
                 video_bps = int(total_bytes * 8 / total_sec)
                 model_bps = estimate_qp_video_bitrate_bps(
-                    widgets.get("info") or {}, settings.quality, settings.limit_res, self.nvenc_available
+                    widgets.get("info") or {}, settings.quality, settings.max_res, self.nvenc_available
                 )
                 widgets["probe"] = {
                     "video_bps": video_bps,
                     "qp": settings.quality,
-                    "limit_res": settings.limit_res,
+                    "max_res": settings.max_res,
                     "tonemapping": settings.tonemapping,
                     "nvenc": self.nvenc_available,
                 }

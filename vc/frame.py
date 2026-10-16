@@ -13,11 +13,11 @@ from vc.conversion import ConversionMixin
 from vc.estimate import estimate_output_size, format_estimate
 from vc.ffmpeg_tools import check_nvenc_available, get_ffmpeg_version
 from vc.marquee import MarqueeSelectionMixin
-from vc.media_probe import parse_audio_tracks, parse_subtitle_tracks, parse_video_info, probe_media
+from vc.media_probe import display_dimensions, parse_audio_tracks, parse_subtitle_tracks, parse_video_info, probe_media
 from vc.probe import ProbeMixin
 from vc.registry import get_reg, save_reg
 from vc.resources import FFMPEG_PATH, FFPROBE_PATH, get_resource_path, read_from_txt
-from vc.settings import RowSettings, format_row_settings
+from vc.settings import RESOLUTION_CHOICES, RowSettings, format_row_settings, target_resolution
 from vc.single_instance import InstanceServer
 from vc.sorting import SortingMixin
 from vc.utils import format_time, human_size
@@ -58,7 +58,7 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
     # Ширины столбцов по умолчанию в DIP. Столбец прогресса растягивается на остаток.
     COL_DEFAULT_WIDTHS = {
         COL_FILE: 360,
-        COL_RES: 92,
+        COL_RES: 125,
         COL_BR: 85,
         COL_SIZE: 65,
         COL_EST: 101,
@@ -260,10 +260,19 @@ CBR — постоянный битрейт видео.
         # опции
         options_box = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.chk_limit_res = wx.CheckBox(panel, label="Ограничивать разрешение до FullHD (1920×1080)")
-        self.chk_limit_res.SetValue(False)
-        self.chk_limit_res.Bind(wx.EVT_CHECKBOX, self.on_limit_res)
-        options_box.Add(self.chk_limit_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
+        self.max_res_label = wx.StaticText(panel, label="Разрешение:")
+        options_box.Add(self.max_res_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(2))
+
+        self.choice_max_res = wx.Choice(panel, choices=[label for _, label in RESOLUTION_CHOICES])
+        self.choice_max_res.SetSelection(0)
+        self.choice_max_res.SetToolTip(
+            "Уменьшать кадр, который больше выбранного разрешения, с сохранением пропорций.\n"
+            "Full HD — 1920×1080, HD — 1280×720, SD — 1024×576; у вертикального видео\n"
+            "стороны меняются местами. Кадр меньше выбранного не увеличивается.\n"
+            "Итоговое разрешение видно в столбце «Разрешение» списка файлов."
+        )
+        self.choice_max_res.Bind(wx.EVT_CHOICE, self.on_max_res)
+        options_box.Add(self.choice_max_res, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(10))
 
         self.tonemapping_label = wx.StaticText(panel, label="HDR→SDR:")
         options_box.Add(self.tonemapping_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(2))
@@ -706,14 +715,16 @@ CBR — постоянный битрейт видео.
 
     def on_skip_video(self, event):
         if self.chk_skip_video.GetValue():
-            self.chk_limit_res.Disable()
+            self.max_res_label.Disable()
+            self.choice_max_res.Disable()
             self.tonemapping_label.Disable()
             self.choice_tonemap.Disable()
             self.slider_label.Disable()
             self.qp_slider.Disable()
             self.encode_mode.Disable()
         else:
-            self.chk_limit_res.Enable()
+            self.max_res_label.Enable()
+            self.choice_max_res.Enable()
             self.tonemapping_label.Enable()
             self.choice_tonemap.Enable()
             self.slider_label.Enable()
@@ -745,7 +756,7 @@ CBR — постоянный битрейт видео.
         return self.get_current_settings()
 
     def update_row_estimate(self, row: int, global_settings: RowSettings | None = None):
-        """Пересчитывает столбец «Ожид. размер» для одной строки."""
+        """Пересчитывает столбцы «Ожид. размер» и «Разрешение» для одной строки."""
         widgets = self._widgets_at(row)
         if not widgets:
             return
@@ -759,12 +770,43 @@ CBR — постоянный битрейт видео.
         if settings.is_global:
             settings = global_settings or self._global_settings_for_estimate()
 
+        self._update_row_resolution(row, widgets, settings)
         est = estimate_output_size(
             widgets.get("info") or {}, settings, self.selected_audio_tracks(widgets), self.nvenc_available, widgets.get("probe")
         )
         widgets["est_bytes"] = int(est[0]) if est else 0
         widgets["est_text"] = format_estimate(est)
         self.list.SetStringItem(row, self.COL_EST, widgets["est_text"])
+
+    def _update_row_resolution(self, row: int, widgets: dict, settings: RowSettings):
+        """
+        Столбец «Разрешение»: размер кадра, а если он будет уменьшен — ещё и
+        выбранное ограничение («3840×2160 → 1080p»). Точный итог — в подсказке ячейки.
+        """
+        w, h = display_dimensions(widgets.get("info") or {})
+        if not (w and h):
+            return
+        target = (w, h) if settings.skip_video else target_resolution(w, h, settings.max_res)
+        text = f"{w}×{h}"
+        tooltip = ""
+        if target != (w, h):
+            text += f" → {settings.max_res}p"
+            tooltip = f"Кадр будет уменьшен: {w}×{h} → {target[0]}×{target[1]}"
+        self.list.SetStringItem(row, self.COL_RES, text)
+        self._set_cell_tooltip(row, self.COL_RES, tooltip)
+
+    def _set_cell_tooltip(self, row: int, col: int, tooltip: str):
+        """Подсказка ячейки списка (пустая строка — подсказки нет)."""
+        item = ULC.UltimateListItem()
+        item.SetId(row)
+        item.SetColumn(col)
+        item.SetToolTip(tooltip)
+        self.list.SetItem(item)
+
+    @staticmethod
+    def _max_res_choice_index(max_res: int) -> int:
+        """Индекс пункта списка «Разрешение» для значения max_res."""
+        return next((i for i, (value, _) in enumerate(RESOLUTION_CHOICES) if value == max_res), 0)
 
     def refresh_all_estimates(self):
         """Пересчитывает прогноз по всем строкам (только арифметика, без ffprobe)."""
@@ -913,7 +955,8 @@ CBR — постоянный битрейт видео.
             self.chk_save_subtitles,
             self.chk_multi_audio,
             self.slider_label,
-            self.chk_limit_res,
+            self.max_res_label,
+            self.choice_max_res,
             self.tonemapping_label,
             self.choice_tonemap,
             self.chk_skip_video,
@@ -947,7 +990,8 @@ CBR — постоянный битрейт видео.
         # Восстанавливаем зависимость: при «не конв. видео» видео-настройки выключены.
         if self.chk_skip_video.GetValue():
             for ctrl in (
-                self.chk_limit_res,
+                self.max_res_label,
+                self.choice_max_res,
                 self.tonemapping_label,
                 self.choice_tonemap,
                 self.slider_label,
@@ -973,7 +1017,7 @@ CBR — постоянный битрейт видео.
             is_global=False,
             encode_mode=self.encode_mode.GetSelection(),
             quality=self.qp_slider.GetValue(),
-            limit_res=self.chk_limit_res.GetValue(),
+            max_res=RESOLUTION_CHOICES[max(self.choice_max_res.GetSelection(), 0)][0],
             tonemapping=self.choice_tonemap.GetSelection(),
             skip_video=self.chk_skip_video.GetValue(),
             skip_audio=self.chk_skip_audio.GetValue(),
@@ -984,7 +1028,7 @@ CBR — постоянный битрейт видео.
             self.encode_mode.SetSelection(self.global_settings.encode_mode)
             self.qp_slider.SetValue(self.global_settings.quality)
             self.on_mode_and_qp_reset()
-            self.chk_limit_res.SetValue(self.global_settings.limit_res)
+            self.choice_max_res.SetSelection(self._max_res_choice_index(self.global_settings.max_res))
             self.choice_tonemap.SetSelection(self.global_settings.tonemapping)
             self.chk_skip_video.SetValue(self.global_settings.skip_video)
             if self.global_settings.skip_video:
@@ -1005,7 +1049,7 @@ CBR — постоянный битрейт видео.
             item_index = self.list.GetNextSelected(item_index)
         self.refresh_all_estimates()
 
-    def on_limit_res(self, event):
+    def on_max_res(self, event):
         self.save_settings_to_sel_rows_and_update_list()
 
     def on_tonemapping(self, event):

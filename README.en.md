@@ -18,7 +18,7 @@ The app is designed for batch work: a file list, shared encoding settings in the
 - **Two rate-control modes:** constant quality (QP/CRF, range 14–30) and constant bitrate (CBR).
 - **Output size prediction** before the conversion starts — the "Expected size" column.
 - **HDR → SDR tone mapping** (`zscale` + `tonemap=hable`) with Auto / On / Off.
-- **Downscale to Full HD** (1920×1080), aspect ratio preserved.
+- **Downscale** to Full HD, HD or SD, aspect ratio preserved (portrait videos are handled).
 - **Audio track selection** per file; re-encoded to AAC with a bitrate derived from the channel count (mono 128k, stereo 192k, 5.1 384k, 7.1 512k).
 - **Subtitle muxing** into MP4 (`mov_text`), preserving track language and title.
 - **"Don't convert" modes** for video and audio separately (stream copy, `-c:v copy` / `-c:a copy`).
@@ -53,7 +53,7 @@ Requirements: Windows 10/11 x64. For hardware acceleration — an NVIDIA GPU wit
 | --- | --- |
 | 🎯 Постоянное качество (QP) | The slider sets QP for NVENC (or CRF for libx264). Lower value — better quality, larger file. Sensible range: 18–28. |
 | 📦 Постоянный битрейт (CBR) | The slider sets the video bitrate in Mbit/s. Use it when the output size has to be predictable. |
-| Ограничивать разрешение до FullHD | Frames larger than 1920×1080 are scaled down, aspect ratio preserved. |
+| Разрешение | "Не менять" (keep) or "До Full HD (1080p)", "До HD (720p)", "До SD (576p)": a frame larger than the 1920×1080, 1280×720 or 1024×576 box is scaled down, aspect ratio preserved. For portrait video the box is rotated (1080p means 1080×1920). Smaller frames are never upscaled. |
 | HDR→SDR | "Авто" — tone mapping is enabled when ffprobe detects HDR (PQ/HLG); "Вкл"/"Выкл" force it on or off. |
 | не конв. видео | The video stream is copied without re-encoding. |
 | не конв. аудио | The audio stream is copied without re-encoding. |
@@ -66,13 +66,13 @@ Requirements: Windows 10/11 x64. For hardware acceleration — an NVIDIA GPU wit
 
 By default the control panel settings apply to every file — such rows are marked **⚙️Глобальные** in the "Параметры" (Settings) column.
 
-Select one or more rows and change a setting, and it is stored for those rows only (the row gets highlighted and "Параметры" shows something like `QP=22, fullHD, TM=auto`). From the context menu these settings can be **applied to all other files** or **reset back to global**.
+Select one or more rows and change a setting, and it is stored for those rows only (the row gets highlighted and "Параметры" shows something like `QP=22, ≤1080p, TM=auto`). From the context menu these settings can be **applied to all other files** or **reset back to global**.
 
 ### List columns
 
 `File` · `Resolution` · `Bitrate` · `Size` · `Expected size` · `Duration` · `Audio track` · `Subtitles` · `Settings` · `Status` · `Progress`
 
-Click a header to sort, click again to reverse the direction. The subtitle column only appears when "сохранить субтитры" is enabled, and "несколько аудио дорожек" swaps the "Audio track" column for an "Audio tracks" check list.
+Click a header to sort, click again to reverse the direction. When a frame is going to be downscaled, the "Resolution" column shows the chosen limit next to the source size (`3840×2160 → 1080p`), and the hover tooltip gives the exact output size. The subtitle column only appears when "сохранить субтитры" is enabled, and "несколько аудио дорожек" swaps the "Audio track" column for an "Audio tracks" check list.
 
 **Expected size** is computed up front: `≈` marks an exact calculation (CBR or stream copy), `~` a rough estimate for QP mode (a blend of a bits-per-pixel model and the source bitrate, calibrated against real NVENC encodes). During encoding the estimate is refined from live FFmpeg data, and when the job finishes the column shows the actual file size. The context menu items "Estimate size with a test encode" (for the selected files or for all of them) encode six 10-second fragments with the same parameters as the conversion and replace the rough estimate with a measurement (`≈`); a later QP change rescales the measurement.
 
@@ -132,6 +132,7 @@ uv sync --no-dev
 
 - Video: `h264_nvenc` (VBR with `-cq` for QP, or `-b:v`/`-maxrate`/`-bufsize` for CBR), falling back to `libx264` (`-crf` / CBR, preset `medium`).
 - Output pixel format is `yuv420p`; tone mapping uses the chain `zscale=t=linear:npl=30 → tonemap=hable:param=1.5 → zscale=t=bt709:m=bt709`.
+- Downscaling uses the `scale` filter (lanczos, `force_original_aspect_ratio=decrease`, both sides even) after tone mapping; the box follows the frame orientation after the phone rotation tag has been applied.
 - Audio: `aac` with the source track's channel count and the bitrate from the table above.
 - Container metadata (`-map_metadata -1`) and embedded EIA-608/CEA-608 closed captions (`-bsf:v filter_units=remove_types=6`) are stripped from the output.
 - File information is collected with a single `ffprobe` call when a file is added, then cached.
