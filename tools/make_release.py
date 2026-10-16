@@ -1,15 +1,19 @@
 """
 Сборка выпуска: PyInstaller (dist\\VC) + установщик Inno Setup (dist\\Video_Converter <версия> Setup.exe).
 
-Запускается из любой папки: uv run tools/make_release.py
+Запускается из любой папки: uv run tools/make_release.py [--install]
+С --install сборка затем тихо устанавливается поверх установленной копии, чтобы её попробовать.
 Вывод PyInstaller и ISCC показывается как есть, чтобы был виден ход сборки.
 """
 
+import argparse
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +35,13 @@ BUNDLED_DATA = [
     ("LICENSE", "."),
     ("sound.wav", "."),
 ]
+
+# AppId установщика (setup.iss) и где Inno Setup записывает установку.
+APP_ID = "{F9F05D79-D5E3-490B-A324-A878E44C23B4}"
+UNINSTALL_KEY = Rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_ID}_is1"
+# Тихая установка: без мастера, вопросов и перезагрузки; прежние ответы
+# (папка, пункт контекстного меню) используются снова.
+SILENT_INSTALL = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"]
 
 ISCC_PATHS = [
     Path(R"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
@@ -166,11 +177,65 @@ def update_iss_version(version: str) -> None:
     print(f"Версия в {ISS_FILE.name}: {old} -> {version}")
 
 
+def installed_folder() -> Path:
+    """Папка установленной копии: где её записал Inno Setup, иначе папка по умолчанию (DefaultDirName)."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
+            return Path(winreg.QueryValueEx(key, "InstallLocation")[0])
+    except OSError:
+        return Path(os.environ.get("APPDATA", "")) / "video_converter"
+
+
+def processes_in(folder: Path) -> list[tuple[str, str]]:
+    """(PID, имя exe) процессов, запущенных из folder: VC.exe и запущенные им ffmpeg.exe, mpv.exe."""
+    query = (
+        "Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($env:VC_FOLDER, 'OrdinalIgnoreCase') }"
+        ' | ForEach-Object { "$($_.Id) $($_.Name).exe" }'
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", query],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "VC_FOLDER": str(folder).rstrip("\\") + "\\"},
+    )
+    return [tuple(line.split(" ", 1)) for line in out.stdout.splitlines() if line.strip()]
+
+
+def close_running_copy(folder: Path) -> None:
+    """
+    Запущенные из папки установки exe заблокированы Windows, и установщик не смог бы их заменить.
+    Сначала WM_CLOSE (taskkill без /F), чтобы окно закрылось само, через 3 секунды — принудительно
+    (так закрываются и ffmpeg/mpv, и приложение, которое во время конвертации спрашивает подтверждение).
+    """
+    running = processes_in(folder)
+    if not running:
+        return
+    for pid, name in running:
+        print(f"  закрываю {name} (PID {pid})")
+        subprocess.run(["taskkill", "/PID", pid], capture_output=True)
+    deadline = time.monotonic() + 3
+    while running and time.monotonic() < deadline:
+        time.sleep(0.2)
+        running = processes_in(folder)
+    if not running:
+        return
+    for pid, name in running:
+        print(f"  принудительно завершаю {name} (PID {pid})")
+        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+    time.sleep(0.5)
+    if processes_in(folder):
+        raise ReleaseError(f"не удалось закрыть программы из {folder}: закройте Video Converter и повторите")
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Сборка выпуска Video Converter")
+    parser.add_argument("--install", action="store_true", help="затем тихо установить сборку поверх установленной копии")
+    args = parser.parse_args()
+
     # Построчная буферизация: при перенаправлении в файл заголовки шагов идут перед выводом сборщиков.
     sys.stdout.reconfigure(line_buffering=True)
     total_started = time.monotonic()
-    steps = Steps(5)
+    steps = Steps(5 + args.install)
     try:
         steps.next(1, "Проверка")
         version = extract_version(VERSION_FILE)
@@ -191,6 +256,18 @@ def main() -> int:
         installer = DIST_DIR / f"Video_Converter {version} Setup.exe"
         if not installer.is_file():
             raise ReleaseError(f"ISCC завершился, но установщик не найден: {installer}")
+
+        if args.install:
+            steps.next(6, "Тихая установка")
+            folder = installed_folder()
+            installed = folder / "VC.exe"
+            # Закрываем сами, а не установщиком (/CLOSEAPPLICATIONS — запасной вариант),
+            # чтобы закрыть и ffmpeg/mpv, запущенные приложением.
+            close_running_copy(folder)
+            run_command([str(installer), *SILENT_INSTALL], "Установка")
+            if not installed.is_file():
+                raise ReleaseError(f"установщик завершился, но {installed} не найден")
+            print(f"Установлено: {installed}")
         steps.finish()
 
     except ReleaseError as e:
@@ -204,6 +281,8 @@ def main() -> int:
     print(f"\n=== Выпуск {version} собран за {minutes} мин {seconds} с ===")
     print(f"  сборка:      {APP_DIR}  ({human_size(dir_size(APP_DIR))})")
     print(f"  установщик:  {installer}  ({human_size(installer.stat().st_size)})")
+    if args.install:
+        print(f"  установлено: {installed}")
     return 0
 
 

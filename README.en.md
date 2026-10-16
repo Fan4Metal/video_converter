@@ -116,6 +116,8 @@ uv run tools/make_release.py
 
 The script reads the version from `__VERSION__` in `vc/__init__.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `tools/setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
 
+With `--install` (`uv run tools/make_release.py --install`) the installer is then run silently over the installed copy, keeping the previous folder and context menu choice. The app (and its ffmpeg/mpv) running from the install folder is closed first.
+
 If you don't need the build tools, install without them:
 
 ```bash
