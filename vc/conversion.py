@@ -13,6 +13,7 @@ from vc.ffmpeg_tools import get_audio_bitrate
 from vc.media_probe import display_dimensions, get_audio_channels, get_hdr_info, get_video_info
 from vc.resources import FFMPEG_PATH, get_resource_path
 from vc.settings import RESOLUTION_LIMITS, RowSettings, resolution_filter, target_resolution
+from vc.formats import MP4_TAG_EXTENSIONS
 from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
 from vc.widgets import CheckListCombo
 
@@ -121,7 +122,7 @@ class ConversionMixin:
 
                 if ok and not self.cancel_event.is_set():
                     widgets.update({"output_file": output_file})
-                    if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() == ".mp4":
+                    if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() in MP4_TAG_EXTENSIONS:
                         tags_ok, tags_err = copy_mp4_tags(path, output_file)
                         if tags_ok:
                             wx.CallAfter(self.log.AppendText, "📌 Теги скопированы\n")

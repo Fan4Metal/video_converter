@@ -12,6 +12,7 @@ from vc.context_menu import ContextMenuMixin
 from vc.conversion import ConversionMixin
 from vc.estimate import estimate_output_size, format_estimate
 from vc.ffmpeg_tools import check_nvenc_available, get_ffmpeg_version
+from vc.formats import input_files_wildcard, input_formats_text
 from vc.marquee import MarqueeSelectionMixin
 from vc.media_probe import display_dimensions, parse_audio_tracks, parse_subtitle_tracks, parse_video_info, probe_media
 from vc.probe import ProbeMixin
@@ -400,7 +401,7 @@ CBR — постоянный битрейт видео.
         with wx.FileDialog(
             self,
             "Выбери видеофайлы",
-            wildcard="Видео файлы (*.mkv;*.mp4;*.mov;*.avi)|*.mkv;*.mp4;*.mov;*.avi",
+            wildcard=input_files_wildcard(),
             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
         ) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
@@ -1079,10 +1080,10 @@ CBR — постоянный битрейт видео.
         self.refresh_all_estimates()
 
     def on_info_page(self, event):
-        description = """\
+        description = f"""\
 Программа для быстрого перекодирования видео в формат MP4 с использованием аппаратного ускорителя видеокарт NVIDIA. Основана на FFmpeg.
 
-Доступны следующие форматы входных файлов: MKV, MP4, MOV, AVI.
+Доступны следующие форматы входных файлов: {input_formats_text()}.
 Выходной формат: MP4.
 Видеокодек: NVENC (H.264), аудиокодек: AAC.
 Настройки качества: режим постоянного качества (QP) или режим постоянного битрейта (CBR).

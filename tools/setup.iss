@@ -37,8 +37,8 @@ Name: "contextmenu"; Description: "{cm:ContextMenuTask}"; GroupDescription: "{cm
 [CustomMessages]
 english.ContextMenuGroup=Explorer integration:
 russian.ContextMenuGroup=Интеграция с Проводником:
-english.ContextMenuTask=Add the "Convert" item to the context menu of video files (MKV, MP4, MOV, AVI)
-russian.ContextMenuTask=Добавить пункт «Сконвертировать» в контекстное меню видеофайлов (MKV, MP4, MOV, AVI)
+english.ContextMenuTask=Add the "Convert" item to the context menu of video files (MKV, MP4, MOV, AVI, M2TS and others)
+russian.ContextMenuTask=Добавить пункт «Сконвертировать» в контекстное меню видеофайлов (MKV, MP4, MOV, AVI, M2TS и другие)
 english.ContextMenuVerb=Convert
 russian.ContextMenuVerb=Сконвертировать
 
@@ -53,22 +53,25 @@ Source: "..\dist\VC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 ; Пункт контекстного меню Проводника для видеофайлов. Ключи в HKCU, т.к. установка без прав администратора.
 ; MultiSelectModel=Player снимает ограничение Проводника в 15 выделенных файлов.
 ; Проводник запускает VC.exe отдельно для каждого файла; приложение само собирает их в одно окно.
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+; Списки расширений (Exts — с пунктом меню, NoExts — без него) make_release.py
+; генерирует из vc/formats.py и передаёт путь к файлу в FormatsInclude.
+#ifndef FormatsInclude
+  #error Установщик собирается через tools/make_release.py: он передаёт список расширений (FormatsInclude)
+#endif
+#include FormatsInclude
+#define I
 
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+; Пункт мог остаться от предыдущей версии установщика, где расширение было в списке, — удаляем.
+#sub RemovedContextMenuEntry
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#NoExts[I]}\shell\VideoConverter"; ValueType: none; Flags: deletekey
+#endsub
 
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+#sub ContextMenuEntry
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#Exts[I]}\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#Exts[I]}\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#Exts[I]}\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#Exts[I]}\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+#endsub
 
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:ContextMenuVerb}"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\VC.exe"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\VideoConverter\command"; ValueType: string; ValueName: ""; ValueData: """{app}\VC.exe"" ""%1"""; Tasks: contextmenu
+#for {I = 0; I < DimOf(NoExts); I++} RemovedContextMenuEntry
+#for {I = 0; I < DimOf(Exts); I++} ContextMenuEntry

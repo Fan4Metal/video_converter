@@ -13,7 +13,7 @@ The app is designed for batch work: a file list, shared encoding settings in the
 ## Features
 
 - **Batch conversion** of a file queue with both overall and per-row progress. Files can be added while a conversion is running — they are appended to the queue; any queued file can be skipped.
-- **"Convert" item in the Explorer context menu** for MKV, MP4, MOV and AVI files: the selected files (several at once, too) are sent to the already open app window. The item is registered by an option in the installer.
+- **"Convert" item in the Explorer context menu** for video files (all input formats except TS): the selected files (several at once, too) are sent to the already open app window. The item is registered by an option in the installer.
 - **NVENC hardware encoding** (`h264_nvenc`, preset `p4`, profile `high`, `spatial_aq`). If NVENC is unavailable, the app falls back to the `libx264` software encoder — slower, same output format.
 - **Two rate-control modes:** constant quality (QP/CRF, range 14–30) and constant bitrate (CBR).
 - **Output size prediction** before the conversion starts — the "Expected size" column.
@@ -27,13 +27,13 @@ The app is designed for batch work: a file list, shared encoding settings in the
 - **Drag & drop**, rubber-band row selection, sortable columns, context menu, FFmpeg log with a Debug mode.
 - **HiDPI support**, sound notification when the queue finishes.
 
-Input formats: MKV, MP4, MOV, AVI. Output format: MP4 (H.264 + AAC).
+Input formats: MKV, MP4, M4V, MOV, AVI, WMV, FLV, WEBM, TS, M2TS, MTS, MPG, MPEG, VOB, 3GP, OGV, MXF. Output format: MP4 (H.264 + AAC).
 
 ## Installation
 
 Download `Video_Converter <version> Setup.exe` from [Releases](https://github.com/Fan4Metal/video_converter/releases) and run it. The app installs into the user profile (`%APPDATA%\video_converter`) and does not require administrator rights.
 
-The setup wizard offers the option "Add the 'Convert' item to the context menu of video files". When selected, MKV, MP4, MOV and AVI files get the corresponding Explorer context menu item; the entries are written to `HKEY_CURRENT_USER` and removed on uninstall.
+The setup wizard offers the option "Add the 'Convert' item to the context menu of video files". When selected, files of all input formats except TS (which is also the TypeScript source extension) get the corresponding Explorer context menu item; the entries are written to `HKEY_CURRENT_USER` and removed on uninstall.
 
 Requirements: Windows 10/11 x64. For hardware acceleration — an NVIDIA GPU with NVENC support and a current driver; without one the app runs on the CPU.
 
@@ -127,7 +127,7 @@ uv sync --no-dev
 ### Project layout
 
 - `main.py` — entry point: single-instance check and window start-up.
-- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `utils.py`.
+- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `formats.py` (supported extensions; `make_release.py` also uses it to register the context menu in the installer), `utils.py`.
 - `tools/` — `make_release.py` (release build), `setup.iss` (Inno Setup), `calibrate_estimate.py` (size-estimate calibration).
 
 ## Technical details

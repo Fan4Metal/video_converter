@@ -17,10 +17,16 @@ import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from vc.formats import CONTEXT_MENU_EXTENSIONS, NO_CONTEXT_MENU_EXTENSIONS
+
 VERSION_FILE = ROOT / "vc" / "__init__.py"
 ISS_FILE = ROOT / "tools" / "setup.iss"
 DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
+# Списки расширений для установщика, генерируются из vc/formats.py.
+FORMATS_INCLUDE = BUILD_DIR / "formats.iss"
 APP_DIR = DIST_DIR / "VC"
 WX_LOCALE_SRC = ROOT / ".venv" / "Lib" / "site-packages" / "wx" / "locale" / "ru"
 WX_LOCALE_DST = APP_DIR / "_internal" / "wx" / "locale" / "ru"
@@ -177,6 +183,27 @@ def update_iss_version(version: str) -> None:
     print(f"Версия в {ISS_FILE.name}: {old} -> {version}")
 
 
+def iss_array(name: str, extensions: tuple[str, ...]) -> list[str]:
+    """Массив препроцессора Inno Setup из расширений (без точки)."""
+    lines = [f"#dim {name}[{len(extensions)}]"]
+    lines += [f'#define {name}[{i}] "{ext.lstrip(".")}"' for i, ext in enumerate(extensions)]
+    return lines
+
+
+def write_formats_include() -> Path:
+    """Пишет списки расширений контекстного меню для setup.iss (см. FormatsInclude)."""
+    lines = [
+        "; Сгенерировано tools/make_release.py из vc/formats.py, не править вручную.",
+        *iss_array("Exts", CONTEXT_MENU_EXTENSIONS),
+        *iss_array("NoExts", NO_CONTEXT_MENU_EXTENSIONS),
+    ]
+    FORMATS_INCLUDE.parent.mkdir(parents=True, exist_ok=True)
+    FORMATS_INCLUDE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Контекстное меню: {', '.join(CONTEXT_MENU_EXTENSIONS)}")
+    print(f"Без пункта меню:  {', '.join(NO_CONTEXT_MENU_EXTENSIONS) or '—'}")
+    return FORMATS_INCLUDE
+
+
 def installed_folder() -> Path:
     """Папка установленной копии: где её записал Inno Setup, иначе папка по умолчанию (DefaultDirName)."""
     try:
@@ -248,11 +275,12 @@ def main() -> int:
         steps.next(3, "Локализация wxPython")
         copy_wx_locale()
 
-        steps.next(4, "Версия в Inno Setup")
+        steps.next(4, "Версия и расширения для Inno Setup")
         update_iss_version(version)
+        formats_include = write_formats_include()
 
         steps.next(5, "Установщик Inno Setup")
-        run_command([str(iscc), str(ISS_FILE)], "ISCC")
+        run_command([str(iscc), f"/DFormatsInclude={formats_include}", str(ISS_FILE)], "ISCC")
         installer = DIST_DIR / f"Video_Converter {version} Setup.exe"
         if not installer.is_file():
             raise ReleaseError(f"ISCC завершился, но установщик не найден: {installer}")
