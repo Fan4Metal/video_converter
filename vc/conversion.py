@@ -2,10 +2,11 @@
 import os
 import re
 import subprocess
-import sys
 import threading
-import time
 import winsound
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import wx
 
@@ -16,6 +17,25 @@ from vc.settings import RESOLUTION_LIMITS, RowSettings, resolution_filter, targe
 from vc.formats import MP4_TAG_EXTENSIONS
 from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
 from vc.widgets import CheckListCombo
+
+# Тип NAL-блока 6 — SEI, в нём H.264 несёт скрытые субтитры EIA-608/CEA-608.
+# В других кодеках тип 6 означает другое (в MPEG-2 — часть кадра), поэтому
+# фильтр ставится только на выход H.264.
+H264_STRIP_CAPTIONS_ARGS = ["-bsf:v", "filter_units=remove_types=6"]
+
+# Сколько последних строк вывода ffmpeg показать в логе при ошибке.
+FFMPEG_ERROR_TAIL_LINES = 12
+
+
+@dataclass(frozen=True)
+class QueueOptions:
+    """Настройки панели, снятые в потоке интерфейса при запуске очереди
+    (на время конвертации эти элементы заблокированы)."""
+    panel_settings: RowSettings
+    save_folder: str | None
+    add_suffix: bool
+    copy_tags: bool
+    save_subtitles: bool
 
 
 class ConversionMixin:
@@ -33,6 +53,14 @@ class ConversionMixin:
             return
 
         self.refresh_all_estimates()
+        self.queue_options = QueueOptions(
+            panel_settings=self.get_current_settings(),
+            save_folder=self.save_folder,
+            add_suffix=self.toggle_suffix.GetValue(),
+            copy_tags=self.chk_copy_tags.GetValue(),
+            save_subtitles=self.chk_save_subtitles.GetValue(),
+        )
+        self.debug_output = self.chk_debug.GetValue()
         self.all_jobs_duration = sum(float(w.get("duration") or 0.0) for w in self.row_widgets.values())
         self.done_duration = 0.0
         self.cancel_event.clear()
@@ -55,6 +83,7 @@ class ConversionMixin:
 
     def queue_worker(self):
         self.current_output_file = None
+        options: QueueOptions = self.queue_options
         try:
             # Обход по индексу без снимка: во время конвертации удаление и
             # сортировка заблокированы, а новые строки добавляются только в конец
@@ -83,13 +112,19 @@ class ConversionMixin:
                         wx.CallAfter(gauge.SetValue, 0)
                     continue
 
+                # Выбор дорожек читаем в потоке интерфейса и там же блокируем
+                # виджеты строки, чтобы выбор не поменялся после чтения.
+                selection = self._call_in_ui(self._take_row_selection, widgets, options.save_subtitles)
+                if selection is None:  # отмена, пока ждали поток интерфейса
+                    break
+                track_indexes, selected_subtitles = selection
+
                 # Пустой список дорожек — выходной файл без аудио.
                 audio_tracks: list[tuple[int, int, str]] = []
-                for track_index in self.selected_audio_tracks(widgets):
+                for track_index in track_indexes:
                     audio_channels = get_audio_channels(path, track_index)
                     audio_tracks.append((track_index, audio_channels, get_audio_bitrate(audio_channels)))
-                output_file = unique_output_path(self.save_folder, path, self.toggle_suffix.GetValue())
-                selected_subtitles = self.get_selected_subtitles(widgets) if self.chk_save_subtitles.GetValue() else []
+                output_file = unique_output_path(options.save_folder, path, options.add_suffix)
 
                 wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏳ Конвертация...")
                 if gauge:
@@ -99,7 +134,6 @@ class ConversionMixin:
                 self.current_output_file = output_file
                 self.skip_event.clear()
                 self._current_uid = uid
-                wx.CallAfter(self._set_row_widgets_enabled, widgets, False)
 
                 predicted_size = int(widgets.get("est_bytes") or 0)
                 if predicted_size:
@@ -122,7 +156,7 @@ class ConversionMixin:
 
                 if ok and not self.cancel_event.is_set():
                     widgets.update({"output_file": output_file})
-                    if self.chk_copy_tags.GetValue() and os.path.splitext(path)[1].lower() in MP4_TAG_EXTENSIONS:
+                    if options.copy_tags and os.path.splitext(path)[1].lower() in MP4_TAG_EXTENSIONS:
                         tags_ok, tags_err = copy_mp4_tags(path, output_file)
                         if tags_ok:
                             wx.CallAfter(self.log.AppendText, "📌 Теги скопированы\n")
@@ -156,16 +190,22 @@ class ConversionMixin:
                     wx.CallAfter(self.log.AppendText, "⏭ Файл пропущен\n")
                     self.done_duration += duration
                 elif self.cancel_event.is_set():
+                    # ffmpeg уже завершён (run_ffmpeg_with_progress дожидается
+                    # процесса), файл не занят — можно удалять.
+                    self._remove_partial_output(output_file)
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
                     self._restore_row_estimate(row, widgets, predicted_size)
                     wx.CallAfter(gauge.SetValue, 100)
                     break
                 else:
+                    self._remove_partial_output(output_file)
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Ошибка")
                     self._restore_row_estimate(row, widgets, predicted_size)
                     self.done_duration += duration
+                self.current_output_file = None
 
             if self.cancel_event.is_set():
+                wx.CallAfter(self.log.AppendText, "⏹ Остановлено.\n")
                 wx.CallAfter(self.progress_label.SetLabel, "⏹ Очередь остановлена пользователем")
             else:
                 wx.CallAfter(self.progress.SetValue, 100)
@@ -173,11 +213,51 @@ class ConversionMixin:
                 winsound.PlaySound(get_resource_path("sound.wav"), winsound.SND_FILENAME | winsound.SND_ASYNC)
 
         finally:
-            self.converting = False
             self.process = None
+            self.current_output_file = None
+            # Флаг сбрасываем до разблокировки кнопки: новая очередь не стартует,
+            # пока эта не закончилась.
+            self.converting = False
             wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
+            wx.CallAfter(self.btn_start.Enable)
             wx.CallAfter(self.progress.SetValue, 0)
             wx.CallAfter(self.enable_interface)
+
+    def _call_in_ui(self, func: Callable, *args):
+        """
+        Выполняет func в потоке интерфейса и возвращает результат (вызов из
+        рабочего потока). При отмене очереди не ждёт и возвращает None.
+        """
+        done = threading.Event()
+        result: dict = {}
+
+        def run():
+            try:
+                result["value"] = func(*args)
+            except Exception as e:  # noqa: BLE001 — передаём в рабочий поток
+                result["error"] = e
+            finally:
+                done.set()
+
+        wx.CallAfter(run)
+        while not done.wait(0.1):
+            if self.cancel_event.is_set():
+                return None
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
+    def _take_row_selection(self, widgets: dict, save_subtitles: bool) -> tuple[list[int], list[dict]]:
+        """Поток интерфейса: выбранные аудиодорожки и субтитры строки; виджеты строки блокируются."""
+        track_indexes = self.selected_audio_tracks(widgets)
+        subtitles = self.get_selected_subtitles(widgets) if save_subtitles else []
+        self._set_row_widgets_enabled(widgets, False)
+        return track_indexes, subtitles
+
+    def on_debug_toggle(self, event):
+        """Флаг отладочного вывода читается рабочим потоком, поэтому держим его копию."""
+        self.debug_output = self.chk_debug.GetValue()
+        event.Skip()
 
     def get_selected_subtitles(self, widgets: dict) -> list[dict]:
         subtitle_list: CheckListCombo | None = widgets.get("subtitles")
@@ -205,9 +285,9 @@ class ConversionMixin:
     def _resolve_effective_settings(self, settings: RowSettings) -> RowSettings:
         """
         Возвращает действующие настройки кодирования: либо настройки строки
-        (если они не «глобальные»), либо текущие значения панели управления.
+        (если они не «глобальные»), либо значения панели на момент запуска очереди.
         """
-        return settings if not settings.is_global else self.get_current_settings()
+        return settings if not settings.is_global else self.queue_options.panel_settings
 
     def _build_audio_args(
         self, skip_audio: bool, audio_tracks: list[tuple[int, int, str]], video_info: dict
@@ -281,9 +361,15 @@ class ConversionMixin:
         """
         Возвращает аргументы видео для ffmpeg: либо ["-c:v", "copy"], либо
         полный набор фильтров/энкодера (NVENC или CPU-фолбэк).
+        Скрытые субтитры вырезаются, только если на выходе H.264.
         """
         if skip_video:
-            wx.CallAfter(self.log.AppendText, "🎥 Видео: copy\n")
+            source_codec = str(video_info.get("codec") or "")
+            if not source_codec or source_codec == "?":
+                source_codec = str(get_video_info(input_path).get("codec") or "")
+            wx.CallAfter(self.log.AppendText, f"🎥 Видео: copy ({source_codec or '?'})\n")
+            if source_codec == "h264":
+                return ["-c:v", "copy", *H264_STRIP_CAPTIONS_ARGS]
             return ["-c:v", "copy"]
 
         # Используем данные, собранные при добавлении файла (кэш), без повторного запуска ffprobe.
@@ -368,7 +454,7 @@ class ConversionMixin:
                 "high",
             ]
 
-        return ["-pix_fmt", "yuv420p", "-vf", vf_filter, *video_encoder_args]
+        return ["-pix_fmt", "yuv420p", "-vf", vf_filter, *video_encoder_args, *H264_STRIP_CAPTIONS_ARGS]
 
     def run_ffmpeg_with_progress(
         self,
@@ -415,8 +501,6 @@ class ConversionMixin:
             "-1",
             *audio_metadata_args,
             *subtitle_metadata_args,
-            "-bsf:v",  # удаление скрытых субтитров (Closed captions EIA-608/CEA-608)
-            "filter_units=remove_types=6",
             *subtitle_codec_args,
             output_path,
         ]
@@ -445,16 +529,22 @@ class ConversionMixin:
         projected_size = 0
         # Живой прогноз включаем, только когда закодировано достаточно для осмысленной экстраполяции.
         min_time_for_estimate = max(5.0, total_duration * 0.02)
+        # Последние строки вывода без строк прогресса — их показываем при ошибке.
+        output_tail: deque[str] = deque(maxlen=FFMPEG_ERROR_TAIL_LINES)
+        debug_shown = False
 
         for line in self.process.stderr:
             if self.cancel_event.is_set() or self.skip_event.is_set():
                 break
 
-            if self.chk_debug.GetValue():
+            if self.debug_output:
+                debug_shown = True
                 wx.CallAfter(self.log.AppendText, line)
 
             m = time_regex.search(line)
             if not m:
+                if line.strip():
+                    output_tail.append(line.rstrip())
                 continue
 
             h, mm, ss = m.groups()
@@ -504,23 +594,34 @@ class ConversionMixin:
                 f"Очередь: {overall_progress}% │ Файл: {row_progress}% │ ⚡ {current_speed}x │ 🎞️ {current_fps} fps | ⏲ {remaining_time}{size_label}",
             )
 
-        # cancel / skip
+        process = self.process
         if self.cancel_event.is_set() or self.skip_event.is_set():
-            try:
-                self.process.terminate()
-                time.sleep(0.3)
-            except Exception:
-                pass
-
-        rc = self.process.wait() if self.process else -1
+            self._kill_process(process)
+        # Дожидаемся завершения: после этого выходной файл свободен и его можно удалить.
+        rc = process.wait()
         if self.cancel_event.is_set() or self.skip_event.is_set():
             return False
 
         if rc != 0:
-            wx.CallAfter(self.log.AppendText, f"❌ FFmpeg завершился с кодом {rc}\n")
+            # Windows отдаёт код как беззнаковый: 4294967274 — это -22 (EINVAL).
+            code = rc - 2**32 if rc >= 2**31 else rc
+            wx.CallAfter(self.log.AppendText, f"❌ FFmpeg завершился с кодом {code}\n")
+            if output_tail and not debug_shown:
+                details = "\n".join(f"   {line}" for line in output_tail)
+                wx.CallAfter(self.log.AppendText, f"Последние сообщения ffmpeg:\n{details}\n")
             return False
 
         return True
+
+    @staticmethod
+    def _kill_process(process: subprocess.Popen | None):
+        """Завершает ffmpeg. В Windows terminate() и так жёсткое TerminateProcess."""
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.kill()
+        except OSError:
+            pass  # процесс завершился сам
 
     # --- Skip ---
     def skip_rows(self, rows: list[int]):
@@ -535,11 +636,7 @@ class ConversionMixin:
             if self.row_order[row] == self._current_uid and "Конвертация" in status:
                 self.log.AppendText(f"\n⏭ Пропуск текущего файла: {widgets.get('path')}\n")
                 self.skip_event.set()
-                if self.process and self.process.poll() is None:
-                    try:
-                        self.process.terminate()
-                    except Exception:
-                        pass
+                self._kill_process(self.process)
             elif status == "Ожидает" and row > self._queue_row:
                 widgets["skip"] = True
                 self.list.SetStringItem(row, self.COL_STATUS, "⏭ Пропущен")
@@ -565,35 +662,21 @@ class ConversionMixin:
 
     # --- Cancel / close ---
     def cancel_conversion(self):
+        """
+        Поток интерфейса: просит очередь остановиться и завершает ffmpeg.
+        Состояние сбрасывает и неполный файл удаляет сам рабочий поток, когда
+        ffmpeg закроет файл; до этого кнопка запуска заблокирована.
+        """
+        if self.cancel_event.is_set():
+            return
         self.cancel_event.set()
-        if self.process and self.process.poll() is None:
-            try:
-                self.log.AppendText("\n⏹ Отмена конвертации...\n")
-                self.process.terminate()
-                time.sleep(0.5)
-                try:
-                    if self.process.poll() is None and sys.platform.startswith("win"):
-                        subprocess.run(
-                            ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                except Exception:
-                    pass
-                self.log.AppendText("⏹ Остановлено.\n")
-            except Exception as e:
-                self.log.AppendText(f"⚠ Ошибка при завершении процесса: {e}\n")
+        self.log.AppendText("\n⏹ Отмена конвертации...\n")
+        self.btn_start.Disable()
+        self.progress_label.SetLabel("⏹ Отмена...")
+        self._kill_process(self.process)
 
-        # удалить текущий неполный файл
-        if self.current_output_file and os.path.exists(self.current_output_file):
-            try:
-                os.remove(self.current_output_file)
-                self.log.AppendText(f"🗑 Удалён неполный файл: {os.path.basename(self.current_output_file)}\n")
-            except Exception as e:
-                self.log.AppendText(f"⚠ Не удалось удалить {self.current_output_file}: {e}\n")
-
-        self.process = None
-        self.converting = False
-        wx.CallAfter(self.progress.SetValue, 0)
-        wx.CallAfter(self.btn_start.SetLabel, "▶ Начать конвертацию")
-        wx.CallAfter(self.progress_label.SetLabel, "⏹ Отменено пользователем")
+    def wait_queue_stopped(self, timeout: float = 10.0):
+        """Ждёт завершения рабочего потока очереди (при выходе из программы)."""
+        thread = self.queue_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)

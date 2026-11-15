@@ -9,7 +9,7 @@ from wx.adv import AboutDialogInfo
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from vc.context_menu import ContextMenuMixin
-from vc.conversion import ConversionMixin
+from vc.conversion import ConversionMixin, QueueOptions
 from vc.estimate import estimate_output_size, format_estimate
 from vc.ffmpeg_tools import check_nvenc_available, get_ffmpeg_version
 from vc.formats import input_files_wildcard, input_formats_text
@@ -111,6 +111,10 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
         self.probe_process: subprocess.Popen | None = None
         self.probe_cancel = threading.Event()
         self.queue_thread: threading.Thread | None = None
+        # Снимок настроек панели на время очереди (задаётся в on_convert)
+        self.queue_options: QueueOptions | None = None
+        # Копия флажка Debug для рабочего потока
+        self.debug_output = False
         self.all_jobs_duration = 0.0
         self.done_duration = 0.0
         self.current_output_file: str | None = None
@@ -321,6 +325,7 @@ CBR — постоянный битрейт видео.
 
         self.chk_debug = wx.CheckBox(panel, label="Debug")
         self.chk_debug.SetValue(False)
+        self.chk_debug.Bind(wx.EVT_CHECKBOX, self.on_debug_toggle)
         options_box.Add(self.chk_debug, 0, wx.ALIGN_CENTER_VERTICAL)
         self.min_client_width_to_debug = options_box.CalcMin().width + self.FromDIP(20)
 
@@ -939,6 +944,9 @@ CBR — постоянный битрейт видео.
                 event.Veto()
                 return
             self.cancel_conversion()
+            # Очередь сама удаляет неполный файл после завершения ffmpeg — ждём её.
+            with wx.BusyCursor():
+                self.wait_queue_stopped()
         if self._instance_server is not None:
             self._instance_server.close()
         self.Destroy()
