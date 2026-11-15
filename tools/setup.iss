@@ -1,6 +1,12 @@
+; Версию (из __VERSION__ в vc/__init__.py) передаёт tools/make_release.py:
+; MyAppVersion — как есть, VersionInfoVersion — дополненной до четырёх чисел.
+#ifndef MyAppVersion
+  #error Установщик собирается через tools/make_release.py: он передаёт версию (MyAppVersion)
+#endif
+#ifndef VersionInfoVersion
+  #error Установщик собирается через tools/make_release.py: он передаёт версию (VersionInfoVersion)
+#endif
 #define MyAppName "Video Converter"
-#define MyAppVersion "0.4.0"
-#define VersionInfoVersion "0.1.0.0"
 #define MyAppPublisher "Vanyunin Alexander"
 
 [Setup]

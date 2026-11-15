@@ -19,9 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from vc import __VERSION__
 from vc.formats import CONTEXT_MENU_EXTENSIONS, NO_CONTEXT_MENU_EXTENSIONS
 
-VERSION_FILE = ROOT / "vc" / "__init__.py"
 ISS_FILE = ROOT / "tools" / "setup.iss"
 DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
@@ -108,12 +108,15 @@ class Steps:
         self.started = None
 
 
-def extract_version(path: Path) -> str:
-    content = path.read_text(encoding="utf-8")
-    match = re.search(r'__VERSION__\s*=\s*["\']([^"\']+)["\']', content)
-    if not match:
-        raise ReleaseError(f"__VERSION__ не найдена в {path}")
-    return match.group(1)
+def version_info_version(version: str) -> str:
+    """
+    Версия для ресурса VERSIONINFO установщика: от одного до четырёх чисел,
+    дополненных нулями до четырёх («0.4.0» → «0.4.0.0»).
+    """
+    if not re.fullmatch(r"\d+(\.\d+){0,3}", version):
+        raise ReleaseError(f"__VERSION__ = {version!r}: нужны от одного до четырёх чисел через точку")
+    parts = version.split(".")
+    return ".".join(parts + ["0"] * (4 - len(parts)))
 
 
 def check_prerequisites() -> Path | None:
@@ -167,20 +170,6 @@ def copy_wx_locale() -> None:
         return
     shutil.copytree(WX_LOCALE_SRC, WX_LOCALE_DST, dirs_exist_ok=True)
     print(f"Локализация wx скопирована в {WX_LOCALE_DST.relative_to(ROOT)}")
-
-
-def update_iss_version(version: str) -> None:
-    content = ISS_FILE.read_text(encoding="utf-8")
-    match = re.search(r'#define MyAppVersion "([^"]+)"', content)
-    if not match:
-        raise ReleaseError(f"в {ISS_FILE} не найдено определение MyAppVersion")
-    old = match.group(1)
-    if old == version:
-        print(f"Версия в {ISS_FILE.name} уже {version}")
-        return
-    content = content.replace(match.group(0), f'#define MyAppVersion "{version}"')
-    ISS_FILE.write_text(content, encoding="utf-8")
-    print(f"Версия в {ISS_FILE.name}: {old} -> {version}")
 
 
 def iss_array(name: str, extensions: tuple[str, ...]) -> list[str]:
@@ -265,8 +254,9 @@ def main() -> int:
     steps = Steps(5 + args.install)
     try:
         steps.next(1, "Проверка")
-        version = extract_version(VERSION_FILE)
-        print(f"  версия:                {version} (из {VERSION_FILE.relative_to(ROOT)})")
+        version = __VERSION__
+        file_version = version_info_version(version)
+        print(f"  версия:                {version} (из vc/__init__.py), VERSIONINFO {file_version}")
         iscc = check_prerequisites()
 
         steps.next(2, "PyInstaller")
@@ -275,12 +265,16 @@ def main() -> int:
         steps.next(3, "Локализация wxPython")
         copy_wx_locale()
 
-        steps.next(4, "Версия и расширения для Inno Setup")
-        update_iss_version(version)
+        steps.next(4, "Расширения для Inno Setup")
         formats_include = write_formats_include()
 
         steps.next(5, "Установщик Inno Setup")
-        run_command([str(iscc), f"/DFormatsInclude={formats_include}", str(ISS_FILE)], "ISCC")
+        iscc_defines = [
+            f"/DMyAppVersion={version}",
+            f"/DVersionInfoVersion={file_version}",
+            f"/DFormatsInclude={formats_include}",
+        ]
+        run_command([str(iscc), *iscc_defines, str(ISS_FILE)], "ISCC")
         installer = DIST_DIR / f"Video_Converter {version} Setup.exe"
         if not installer.is_file():
             raise ReleaseError(f"ISCC завершился, но установщик не найден: {installer}")

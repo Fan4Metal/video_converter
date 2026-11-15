@@ -1,6 +1,7 @@
 [project]
 name = "video-converter"
-version = "0.4.0"
+# Версия задаётся только в vc/__init__.py (__VERSION__).
+dynamic = ["version"]
 description = "Video converter: NVENC+AAC"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -13,3 +14,18 @@ dependencies = [
 dev = [
     "pyinstaller>=6.21.0",
 ]
+
+# Сборщик нужен uv только чтобы прочитать версию из vc/__init__.py;
+# сам проект в окружение не устанавливается (package = false).
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["vc"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vc.__VERSION__" }
+
+[tool.uv]
+package = false

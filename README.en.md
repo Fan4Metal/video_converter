@@ -115,7 +115,9 @@ On top of the project dependencies you need [Inno Setup 6](https://jrsoftware.or
 uv run tools/make_release.py
 ```
 
-The script reads the version from `__VERSION__` in `vc/__init__.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, writes the version into `tools/setup.iss` and invokes `ISCC.exe`. The resulting installer lands in `dist`.
+The script reads the version from `__VERSION__` in `vc/__init__.py`, builds `dist\VC` in `--onedir` mode with PyInstaller, copies the wxPython Russian locale, generates the context-menu extension list from `vc/formats.py` and invokes `ISCC.exe`, passing it the version and that list. The resulting installer lands in `dist`. `tools/setup.iss` cannot be compiled directly without the script: without these values the compiler stops with an error.
+
+The version lives only in `__VERSION__` (`vc/__init__.py`): `pyproject.toml` reads it from there (`dynamic = ["version"]`) and `uv.lock` does not store it. To release a new version, change it there.
 
 With `--install` (`uv run tools/make_release.py --install`) the installer is then run silently over the installed copy, keeping the previous folder and context menu choice. The app (and its ffmpeg/mpv) running from the install folder is closed first.
 
