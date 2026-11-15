@@ -4,6 +4,8 @@ import re
 
 import wx
 
+from vc.file_row import FileRow
+
 
 class SortingMixin:
     """
@@ -44,7 +46,8 @@ class SortingMixin:
 
     def _row_sort_key(self, s: dict, col: int):
         """Ключ сортировки для снимка строки по выбранному столбцу."""
-        info = s.get("info") or {}
+        entry: FileRow = s["entry"]
+        info = entry.info or {}
         if col == self.COL_RES:
             return self._to_number(info.get("width"), 0) * self._to_number(info.get("height"), 0)
         if col == self.COL_BR:
@@ -52,19 +55,19 @@ class SortingMixin:
         if col == self.COL_SIZE:
             return float(info.get("size") or 0)
         if col == self.COL_EST:
-            return float((s.get("extra") or {}).get("est_bytes") or 0)
+            return float(entry.est_bytes or 0)
         if col == self.COL_TIME:
-            return float(s.get("duration") or 0.0)
+            return float(entry.duration or 0.0)
         if col == self.COL_SUBTITLES:
-            return float(len(s.get("subtitle_tracks") or []))
+            return float(len(entry.subtitle_tracks or []))
         if col == self.COL_AUDIO:
-            sel = s.get("audio_sel", wx.NOT_FOUND)
-            choices = s.get("audio_choices") or []
+            sel = s["audio_sel"]
+            choices = entry.audio_choices or []
             return (choices[sel] if 0 <= sel < len(choices) else "").lower()
         if col == self.COL_STATUS:
-            return s.get("col_status", "").lower()
+            return s["col_status"].lower()
         # COL_FILE и всё остальное — по имени файла
-        return os.path.basename(s.get("path") or "").lower()
+        return os.path.basename(entry.path or "").lower()
 
     def sort_rows(self, col: int, ascending: bool):
         snaps = [self._snapshot_row(r) for r in range(self.list.GetItemCount())]
@@ -72,34 +75,19 @@ class SortingMixin:
         self._rebuild_rows(snaps)
 
     def _snapshot_row(self, row: int) -> dict:
-        """Полный снимок строки: текстовые столбцы + состояние виджетов."""
+        """
+        Снимок строки: сама строка (FileRow переносится как есть) плюс то, что
+        живёт только в списке и виджетах — тексты столбцов и выбор дорожек.
+        """
         uid = self.row_order[row]
-        w = self.row_widgets[uid]
-        choice: wx.Choice | None = w.get("choice")
-        subtitles = w.get("subtitles")
-        audio_multi = w.get("audio_multi")
-        gauge: wx.Gauge | None = w.get("gauge")
-        # Прочие ключи (например, output_file), добавленные после конвертации.
-        extra = {
-            k: v
-            for k, v in w.items()
-            if k not in ("path", "choice", "audio_choices", "audio_multi", "subtitles", "subtitle_tracks", "gauge", "duration", "info", "settings")
-        }
+        entry = self.entries[uid]
         return {
             "uid": uid,
-            "path": w.get("path"),
-            "info": w.get("info"),
-            "duration": w.get("duration"),
-            "settings": w.get("settings"),
-            "subtitle_tracks": w.get("subtitle_tracks"),
-            "audio_choices": [choice.GetString(i) for i in range(choice.GetCount())] if choice else [],
-            "audio_sel": choice.GetSelection() if choice else wx.NOT_FOUND,
-            "has_audio_multi_widget": audio_multi is not None,
-            "audio_multi_checked": audio_multi.GetCheckedItems() if audio_multi else None,
-            "has_subtitle_widget": subtitles is not None,
-            "subtitle_checked": subtitles.GetCheckedItems() if subtitles else None,
-            "gauge_value": gauge.GetValue() if gauge else 0,
-            "extra": extra,
+            "entry": entry,
+            "audio_sel": entry.choice.GetSelection() if entry.choice else wx.NOT_FOUND,
+            "audio_multi_checked": entry.audio_multi.GetCheckedItems() if entry.audio_multi else None,
+            "subtitle_checked": entry.subtitles.GetCheckedItems() if entry.subtitles else None,
+            "gauge_value": entry.gauge.GetValue() if entry.gauge else 0,
             "col_file": self.list.GetItem(row, self.COL_FILE).GetText(),
             "col_res": self.list.GetItem(row, self.COL_RES).GetText(),
             "col_res_tooltip": self.list.GetItem(row, self.COL_RES).GetToolTip(),
@@ -114,17 +102,11 @@ class SortingMixin:
     def _rebuild_rows(self, snaps: list[dict]):
         """Перестраивает список в порядке snaps, пересоздавая встроенные виджеты."""
         # Уничтожаем старые виджеты
-        for w in self.row_widgets.values():
-            for key in self.ROW_WIDGET_KEYS:
-                try:
-                    ctrl = w.get(key)
-                    if ctrl:
-                        ctrl.Destroy()
-                except Exception:
-                    pass
+        for entry in self.entries.values():
+            entry.destroy_windows()
 
         self.list.DeleteAllItems()
-        self.row_widgets.clear()
+        self.entries.clear()
         self.row_order.clear()
 
         for s in snaps:
@@ -139,7 +121,8 @@ class SortingMixin:
             self.list.SetStringItem(row, self.COL_STATUS, s["col_status"])
             self.list.SetStringItem(row, self.COL_SETTINGS, s["col_settings"])
 
-            choice = wx.Choice(self.list, choices=s["audio_choices"])
+            entry: FileRow = s["entry"]
+            choice = wx.Choice(self.list, choices=entry.audio_choices)
             sel = s["audio_sel"]
             if sel != wx.NOT_FOUND and 0 <= sel < choice.GetCount():
                 choice.SetSelection(sel)
@@ -150,31 +133,21 @@ class SortingMixin:
             gauge.SetValue(int(s["gauge_value"] or 0))
             self.list.SetItemWindow(row, self.COL_PROGRESS, gauge, expand=True)
 
+            # Строка та же, меняются только её виджеты (необязательные
+            # столбцы destroy_windows уже обнулил).
+            entry.choice = choice
+            entry.gauge = gauge
             uid = s["uid"]
             self.row_order.append(uid)
-            self.row_widgets[uid] = {
-                "path": s["path"],
-                "choice": choice,
-                "audio_choices": s["audio_choices"],
-                "audio_multi": None,
-                "subtitles": None,
-                "subtitle_tracks": s["subtitle_tracks"],
-                "gauge": gauge,
-                "duration": s["duration"],
-                "info": s["info"],
-                "settings": s["settings"],
-                **(s.get("extra") or {}),
-            }
-            if s["has_audio_multi_widget"]:
+            self.entries[uid] = entry
+            if s["audio_multi_checked"] is not None:
                 self.create_audio_multi_widget(row)
-                combo = self.row_widgets[uid].get("audio_multi")
-                if combo is not None and s["audio_multi_checked"] is not None:
-                    combo.SetCheckedItems(s["audio_multi_checked"])
-            if s["has_subtitle_widget"]:
+                if entry.audio_multi is not None:
+                    entry.audio_multi.SetCheckedItems(s["audio_multi_checked"])
+            if s["subtitle_checked"] is not None:
                 self.create_subtitle_widget(row)
-                sub = self.row_widgets[uid].get("subtitles")
-                if sub is not None and s["subtitle_checked"] is not None:
-                    sub.SetCheckedItems(s["subtitle_checked"])
+                if entry.subtitles is not None:
+                    entry.subtitles.SetCheckedItems(s["subtitle_checked"])
 
         self._reindex_item_windows()
         self._schedule_progress_fit()

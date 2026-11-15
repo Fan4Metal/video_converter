@@ -128,7 +128,7 @@ uv sync --no-dev
 ### Структура проекта
 
 - `main.py` — точка входа: проверка единственного экземпляра и запуск окна.
-- `vc/` — пакет приложения: `frame.py` (главное окно), примеси окна `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, а также модули без wx — `media_probe.py` (ffprobe), `estimate.py` (прогноз размера), `single_instance.py`, `settings.py`, `formats.py` (поддерживаемые расширения; из него же `make_release.py` прописывает контекстное меню в установщике), `utils.py`.
+- `vc/` — пакет приложения: `frame.py` (главное окно), примеси окна `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, а также модули без wx — `media_probe.py` (ffprobe), `estimate.py` (прогноз размера), `single_instance.py`, `settings.py`, `file_row.py` (строка списка: данные файла, её виджеты и состояние в очереди), `formats.py` (поддерживаемые расширения; из него же `make_release.py` прописывает контекстное меню в установщике), `utils.py`.
 - `tools/` — `make_release.py` (сборка релиза), `setup.iss` (Inno Setup), `calibrate_estimate.py` (калибровка прогноза размера).
 
 ## Технические детали

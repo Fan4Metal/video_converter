@@ -130,7 +130,7 @@ uv sync --no-dev
 ### Project layout
 
 - `main.py` — entry point: single-instance check and window start-up.
-- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `formats.py` (supported extensions; `make_release.py` also uses it to register the context menu in the installer), `utils.py`.
+- `vc/` — the application package: `frame.py` (main window), window mixins `conversion.py`, `probe.py`, `sorting.py`, `marquee.py`, `context_menu.py`, plus wx-free modules — `media_probe.py` (ffprobe), `estimate.py` (size estimation), `single_instance.py`, `settings.py`, `file_row.py` (a list row: file data, its widgets and queue state), `formats.py` (supported extensions; `make_release.py` also uses it to register the context menu in the installer), `utils.py`.
 - `tools/` — `make_release.py` (release build), `setup.iss` (Inno Setup), `calibrate_estimate.py` (size-estimate calibration).
 
 ## Technical details

@@ -11,6 +11,7 @@ from wx.lib.agw import ultimatelistctrl as ULC
 from vc.context_menu import ContextMenuMixin
 from vc.conversion import ConversionMixin, QueueOptions
 from vc.estimate import estimate_output_size, format_estimate
+from vc.file_row import FileRow, TrackColumn
 from vc.ffmpeg_tools import check_nvenc_available, get_ffmpeg_version
 from vc.formats import input_files_wildcard, input_formats_text
 from vc.marquee import MarqueeSelectionMixin
@@ -74,8 +75,6 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
     # Запас к ширине заголовка и минимальная ширина растягиваемого столбца прогресса (DIP).
     COL_HEADER_PADDING = 6
     COL_PROGRESS_MIN = 90
-    # Ключи встроенных в строку виджетов (уничтожаются вместе со строкой).
-    ROW_WIDGET_KEYS = ("choice", "audio_multi", "subtitles", "gauge")
 
     def __init__(self):
         super().__init__(
@@ -89,10 +88,10 @@ class VideoConverter(MarqueeSelectionMixin, SortingMixin, ContextMenuMixin, Prob
         panel.SetDropTarget(FileDropTarget(self))
 
         # состояние
-        # row_widgets ключуется стабильным uid (не индексом строки).
+        # entries ключуется стабильным uid (не индексом строки).
         # row_order хранит uid в порядке отображения списка — это источник
         # правды для соответствия «индекс строки -> uid».
-        self.row_widgets: dict[int, dict] = {}
+        self.entries: dict[int, FileRow] = {}
         self.row_order: list[int] = []
         self._next_row_uid = 0
         # Состояние сортировки по клику на заголовок столбца
@@ -479,11 +478,11 @@ CBR — постоянный битрейт видео.
             video_info=info,
         )
 
-    def _widgets_at(self, row: int) -> dict | None:
-        """Виджеты строки по индексу отображения (через стабильный uid из row_order)."""
+    def _entry_at(self, row: int) -> FileRow | None:
+        """Строка по индексу отображения (через стабильный uid из row_order)."""
         if row is None or row < 0 or row >= len(self.row_order):
             return None
-        return self.row_widgets.get(self.row_order[row])
+        return self.entries.get(self.row_order[row])
 
     def on_remove_selected(self, event):
         if self.converting:
@@ -503,18 +502,11 @@ CBR — постоянный битрейт видео.
             wx.MessageBox("Нельзя очищать список во время конвертации.", "Внимание", wx.OK | wx.ICON_WARNING)
             return
 
-        # уничтожаем виджеты
-        for w in self.row_widgets.values():
-            for key in self.ROW_WIDGET_KEYS:
-                try:
-                    ctrl = w.get(key)
-                    if ctrl:
-                        ctrl.Destroy()
-                except Exception:
-                    pass
+        for entry in self.entries.values():
+            entry.destroy_windows()
 
         self.list.DeleteAllItems()
-        self.row_widgets.clear()
+        self.entries.clear()
         self.row_order.clear()
         self._schedule_progress_fit()
         self.log.AppendText("\n🧹 Список очищен.\n")
@@ -523,18 +515,13 @@ CBR — постоянный битрейт видео.
         if row < 0 or row >= len(self.row_order):
             return
         uid = self.row_order[row]
-        w = self.row_widgets.get(uid)
-        if w:
-            for key in self.ROW_WIDGET_KEYS:
-                try:
-                    if w.get(key):
-                        w[key].Destroy()
-                except Exception:
-                    pass
+        entry = self.entries.get(uid)
+        if entry:
+            entry.destroy_windows()
 
         self.list.DeleteItem(row)
         self.row_order.pop(row)
-        self.row_widgets.pop(uid, None)
+        self.entries.pop(uid, None)
         self._reindex_item_windows()
         self._schedule_progress_fit()
 
@@ -595,13 +582,11 @@ CBR — постоянный битрейт видео.
 
         widget_to_row: dict[int, int] = {}
         for row in range(self.list.GetItemCount()):
-            widgets = self._widgets_at(row)
-            if not widgets:
+            entry = self._entry_at(row)
+            if not entry:
                 continue
-            for key in self.ROW_WIDGET_KEYS:
-                ctrl = widgets.get(key)
-                if ctrl is not None:
-                    widget_to_row[id(ctrl)] = row
+            for ctrl in entry.embedded_windows():
+                widget_to_row[id(ctrl)] = row
 
         for item in items_with_window:
             wnd = getattr(item, "_wnd", None)
@@ -690,9 +675,9 @@ CBR — постоянный битрейт видео.
         """
         enabled = self.chk_multi_audio.GetValue()
         if not enabled:
-            for widgets in self.row_widgets.values():
-                tracks = self.selected_audio_tracks(widgets)
-                choice: wx.Choice | None = widgets.get("choice")
+            for entry in self.entries.values():
+                tracks = self.selected_audio_tracks(entry)
+                choice: wx.Choice | None = entry.choice
                 if tracks and choice and tracks[0] < choice.GetCount():
                     choice.SetSelection(tracks[0])
         self._toggle_track_column("audio_multi", self.COL_AUDIO_MULTI, enabled, self.create_audio_multi_widget)
@@ -700,20 +685,14 @@ CBR — постоянный битрейт видео.
         # Набор дорожек входит в прогноз размера.
         self.refresh_all_estimates()
 
-    def _toggle_track_column(self, key: str, col: int, enabled: bool, create_widget):
+    def _toggle_track_column(self, attr: TrackColumn, col: int, enabled: bool, create_widget):
         """Показывает столбец с виджетами выбора дорожек (создавая их) или прячет, уничтожая виджеты."""
         if enabled:
             for row in range(self.list.GetItemCount()):
                 create_widget(row)
         else:
-            for widgets in self.row_widgets.values():
-                ctrl = widgets.get(key)
-                if ctrl:
-                    try:
-                        ctrl.Destroy()
-                    except Exception:
-                        pass
-                widgets[key] = None
+            for entry in self.entries.values():
+                entry.destroy_track_widget(attr)
 
         self.list.SetColumnShown(col, enabled)
         self._schedule_progress_fit()
@@ -763,8 +742,8 @@ CBR — постоянный битрейт видео.
 
     def update_row_estimate(self, row: int, global_settings: RowSettings | None = None):
         """Пересчитывает столбцы «Ожид. размер» и «Разрешение» для одной строки."""
-        widgets = self._widgets_at(row)
-        if not widgets:
+        entry = self._entry_at(row)
+        if not entry:
             return
 
         status = self.list.GetItem(row, self.COL_STATUS).GetText()
@@ -772,24 +751,24 @@ CBR — постоянный битрейт видео.
         if "Конвертация" in status or "Готово" in status:
             return
 
-        settings: RowSettings = widgets.get("settings") or RowSettings()
+        settings: RowSettings = entry.settings or RowSettings()
         if settings.is_global:
             settings = global_settings or self._global_settings_for_estimate()
 
-        self._update_row_resolution(row, widgets, settings)
+        self._update_row_resolution(row, entry, settings)
         est = estimate_output_size(
-            widgets.get("info") or {}, settings, self.selected_audio_tracks(widgets), self.nvenc_available, widgets.get("probe")
+            entry.info or {}, settings, self.selected_audio_tracks(entry), self.nvenc_available, entry.probe
         )
-        widgets["est_bytes"] = int(est[0]) if est else 0
-        widgets["est_text"] = format_estimate(est)
-        self.list.SetStringItem(row, self.COL_EST, widgets["est_text"])
+        entry.est_bytes = int(est[0]) if est else 0
+        entry.est_text = format_estimate(est)
+        self.list.SetStringItem(row, self.COL_EST, entry.est_text)
 
-    def _update_row_resolution(self, row: int, widgets: dict, settings: RowSettings):
+    def _update_row_resolution(self, row: int, entry: FileRow, settings: RowSettings):
         """
         Столбец «Разрешение»: размер кадра, а если он будет уменьшен — ещё и
         выбранное ограничение («3840×2160 → 1080p»). Точный итог — в подсказке ячейки.
         """
-        w, h = display_dimensions(widgets.get("info") or {})
+        w, h = display_dimensions(entry.info or {})
         if not (w and h):
             return
         target = (w, h) if settings.skip_video else target_resolution(w, h, settings.max_res)
@@ -820,26 +799,26 @@ CBR — постоянный битрейт видео.
         for row in range(self.list.GetItemCount()):
             self.update_row_estimate(row, global_settings)
 
-    def _restore_row_estimate(self, row: int, widgets: dict, predicted_size: int):
+    def _restore_row_estimate(self, row: int, entry: FileRow, predicted_size: int):
         """Возвращает в столбец прогноз, посчитанный до старта: файл не готов."""
-        widgets["est_bytes"] = predicted_size
-        wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, widgets.get("est_text") or "?")
+        entry.est_bytes = predicted_size
+        wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, entry.est_text or "?")
 
     def on_audio_choice(self, event):
         # При «не конв. аудио» размер зависит от битрейта выбранной дорожки.
         event.Skip()
         self.refresh_all_estimates()
 
-    def selected_audio_tracks(self, widgets: dict) -> list[int]:
+    def selected_audio_tracks(self, entry: FileRow) -> list[int]:
         """
         Индексы (a:N) аудиодорожек строки для вывода, основная первая. В режиме
         нескольких дорожек — отмеченные в списке, иначе — выбранная в wx.Choice.
         Пустой список — файл конвертируется без аудио.
         """
-        combo: CheckListCombo | None = widgets.get("audio_multi")
+        combo: CheckListCombo | None = entry.audio_multi
         if combo:
             return combo.GetCheckedItems()
-        choice: wx.Choice | None = widgets.get("choice")
+        choice: wx.Choice | None = entry.choice
         sel = choice.GetSelection() if choice else wx.NOT_FOUND
         return [] if sel == wx.NOT_FOUND else [sel]
 
@@ -880,18 +859,15 @@ CBR — постоянный битрейт видео.
         uid = self._next_row_uid
         self._next_row_uid += 1
         self.row_order.append(uid)
-        self.row_widgets[uid] = {
-            "path": path,
-            "choice": choice,
-            "audio_choices": audio_choices,
-            "audio_multi": None,
-            "subtitles": None,
-            "subtitle_tracks": subtitle_tracks,
-            "gauge": gauge,
-            "duration": float(duration or 0.0),
-            "info": video_info or {},
-            "settings": RowSettings(),
-        }
+        self.entries[uid] = FileRow(
+            path=path,
+            audio_choices=audio_choices,
+            subtitle_tracks=subtitle_tracks,
+            duration=float(duration or 0.0),
+            info=video_info or {},
+            choice=choice,
+            gauge=gauge,
+        )
         self.update_row_estimate(row)
         # Появившаяся вертикальная полоса прокрутки сужает список.
         self._schedule_progress_fit()
@@ -904,29 +880,29 @@ CBR — постоянный битрейт видео.
             self.all_jobs_duration += float(duration or 0.0)
 
     def create_subtitle_widget(self, row: int):
-        widgets = self._widgets_at(row)
-        if not widgets or widgets.get("subtitles"):
+        entry = self._entry_at(row)
+        if not entry or entry.subtitles:
             return
-        subtitle_choices = [track["display"] for track in widgets.get("subtitle_tracks", [])]
+        subtitle_choices = [track["display"] for track in entry.subtitle_tracks]
         subtitles = CheckListCombo(self.list, choices=subtitle_choices)
         self.list.SetItemWindow(row, self.COL_SUBTITLES, subtitles, expand=True)
-        widgets["subtitles"] = subtitles
+        entry.subtitles = subtitles
 
     def create_audio_multi_widget(self, row: int):
-        widgets = self._widgets_at(row)
-        if not widgets or widgets.get("audio_multi"):
+        entry = self._entry_at(row)
+        if not entry or entry.audio_multi:
             return
         combo = CheckListCombo(
             self.list,
-            choices=list(widgets.get("audio_choices") or []),
+            choices=list(entry.audio_choices or []),
             empty_label="Нет дорожек",
             none_label="Без аудио",
             on_change=self.refresh_all_estimates,
         )
         # Стартуем с дорожки, выбранной в обычном столбце.
-        combo.SetCheckedItems(self.selected_audio_tracks(widgets))
+        combo.SetCheckedItems(self.selected_audio_tracks(entry))
         self.list.SetItemWindow(row, self.COL_AUDIO_MULTI, combo, expand=True)
-        widgets["audio_multi"] = combo
+        entry.audio_multi = combo
 
     def on_item_select(self, event):
         self.global_settings = self.get_current_settings()
@@ -973,18 +949,10 @@ CBR — постоянный битрейт видео.
             self.chk_copy_tags,
         ]
 
-    @staticmethod
-    def _set_row_widgets_enabled(widgets: dict, enabled: bool):
-        """Блокирует/разблокирует виджеты выбора дорожек одной строки."""
-        for key in ("choice", "audio_multi", "subtitles"):
-            ctrl = widgets.get(key)
-            if ctrl:
-                ctrl.Enable(enabled)
-
     def _set_rows_enabled(self, enabled: bool):
         """Блокирует/разблокирует виджеты выбора дорожек во всех строках списка."""
-        for widgets in self.row_widgets.values():
-            self._set_row_widgets_enabled(widgets, enabled)
+        for entry in self.entries.values():
+            entry.set_tracks_enabled(enabled)
 
     def disable_interface(self):
         # Строки не блокируем: у ожидающих строк дорожки можно менять до их старта,
@@ -1049,9 +1017,9 @@ CBR — постоянный битрейт видео.
         item_index = self.list.GetFirstSelected()
         while item_index != -1:
             settings = self.get_current_settings()
-            widgets = self._widgets_at(item_index)
-            if widgets:
-                widgets["settings"] = settings
+            entry = self._entry_at(item_index)
+            if entry:
+                entry.settings = settings
             self.list.SetStringItem(item_index, self.COL_SETTINGS, format_row_settings(settings))
             self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 251, 235))
             self.list.Refresh()
@@ -1078,10 +1046,10 @@ CBR — постоянный битрейт видео.
         item_index = self.list.GetFirstSelected()
         if item_index == -1:
             return
-        widgets = self._widgets_at(item_index)
-        if not widgets:
+        entry = self._entry_at(item_index)
+        if not entry:
             return
-        widgets["settings"] = RowSettings()
+        entry.settings = RowSettings()
         self.list.SetStringItem(item_index, self.COL_SETTINGS, "⚙️Глобальные")
         self.list.SetItemBackgroundColour(item_index, wx.Colour(255, 255, 255))
         self.list.Refresh()

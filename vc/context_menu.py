@@ -14,12 +14,12 @@ class ContextMenuMixin:
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self._widgets_at(row)
-        if not widgets:
+        entry = self._entry_at(row)
+        if not entry:
             return
-        path = widgets.get("path")
+        path = entry.path
         if os.path.isfile(path):
-            audio_stream_num = widgets.get("choice").GetSelection() + 1
+            audio_stream_num = entry.choice.GetSelection() + 1
             subprocess.Popen(
                 [
                     MPV_PATH,
@@ -62,11 +62,11 @@ class ContextMenuMixin:
         # Пункты меню
         play_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести")
         play_converted_item = menu.Append(wx.ID_ANY, "▶ Воспроизвести сконвертированный файл")
-        widgets = self._widgets_at(item)
-        if not widgets:
+        entry = self._entry_at(item)
+        if not entry:
             menu.Destroy()
             return
-        if self.list.GetItem(item, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
+        if self.list.GetItem(item, self.COL_STATUS).GetText() == "✅ Готово" and entry.output_file is not None:
             play_converted_item.Enable()
         else:
             play_converted_item.Enable(False)
@@ -87,7 +87,7 @@ class ContextMenuMixin:
         menu.AppendSeparator()
 
         status = self.list.GetItem(item, self.COL_STATUS).GetText()
-        if self.converting and widgets.get("skip") and item > self._queue_row:
+        if self.converting and entry.skip and item > self._queue_row:
             unskip_item = menu.Append(wx.ID_ANY, "↩ Вернуть в очередь")
             self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.unskip_rows, self._selected_rows() or [item]), unskip_item)
         else:
@@ -97,7 +97,7 @@ class ContextMenuMixin:
             self.Bind(wx.EVT_MENU, lambda e: wx.CallAfter(self.skip_rows, self._selected_rows() or [item]), skip_item)
         menu.AppendSeparator()
 
-        settings_obj = widgets.get("settings")
+        settings_obj = entry.settings
         if settings_obj and not settings_obj.is_global:
             reset_convert_settings_item = menu.Append(wx.ID_ANY, "🔄 Сбросить настройки конвертации")
             menu.AppendSeparator()
@@ -133,11 +133,11 @@ class ContextMenuMixin:
         if row == -1:
             return
 
-        widgets = self._widgets_at(row)
-        if not widgets:
+        entry = self._entry_at(row)
+        if not entry:
             return
 
-        path = widgets.get("path")
+        path = entry.path
         if path and os.path.isfile(path):
             subprocess.Popen(f'explorer /select,"{path}"')
 
@@ -146,10 +146,10 @@ class ContextMenuMixin:
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self._widgets_at(row)
-        if not widgets:
+        entry = self._entry_at(row)
+        if not entry:
             return
-        path = widgets.get("output_file", "")
+        path = entry.output_file or ""
         if path and os.path.isfile(path):
             subprocess.Popen(f'explorer /select,"{path}"')
 
@@ -157,11 +157,11 @@ class ContextMenuMixin:
         row = self.list.GetFirstSelected()
         if row == -1:
             return
-        widgets = self._widgets_at(row)
-        if not widgets:
+        entry = self._entry_at(row)
+        if not entry:
             return
-        if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and "output_file" in widgets:
-            output_file = widgets.get("output_file")
+        if self.list.GetItem(row, self.COL_STATUS).GetText() == "✅ Готово" and entry.output_file is not None:
+            output_file = entry.output_file
             if os.path.isfile(output_file):
                 subprocess.Popen(
                     [
@@ -184,48 +184,48 @@ class ContextMenuMixin:
         if self.converting:
             return
 
-        source = self._widgets_at(source_row)
+        source = self._entry_at(source_row)
         if not source:
             return
 
-        source_choice: wx.Choice | None = source.get("choice")
+        source_choice: wx.Choice | None = source.choice
         audio_index = source_choice.GetSelection() if source_choice else wx.NOT_FOUND
 
         multi_audio = self.chk_multi_audio.GetValue()
-        source_multi: CheckListCombo | None = source.get("audio_multi")
+        source_multi: CheckListCombo | None = source.audio_multi
         multi_indexes = source_multi.GetCheckedItems() if (multi_audio and source_multi) else []
 
         save_subtitles = self.chk_save_subtitles.GetValue()
-        source_subtitles: CheckListCombo | None = source.get("subtitles")
+        source_subtitles: CheckListCombo | None = source.subtitles
         subtitle_indexes = source_subtitles.GetCheckedItems() if (save_subtitles and source_subtitles) else []
 
         applied = 0
         for row in range(self.list.GetItemCount()):
             if row == source_row:
                 continue
-            widgets = self._widgets_at(row)
-            if not widgets:
+            entry = self._entry_at(row)
+            if not entry:
                 continue
 
             # Аудио дорожка по номеру
-            choice: wx.Choice | None = widgets.get("choice")
+            choice: wx.Choice | None = entry.choice
             if choice and audio_index != wx.NOT_FOUND and audio_index < choice.GetCount():
                 choice.SetSelection(audio_index)
 
             # Набор аудиодорожек по номерам
             if multi_audio:
                 self.create_audio_multi_widget(row)
-                multi: CheckListCombo | None = widgets.get("audio_multi")
+                multi: CheckListCombo | None = entry.audio_multi
                 if multi:
-                    track_count = len(widgets.get("audio_choices") or [])
+                    track_count = len(entry.audio_choices or [])
                     multi.SetCheckedItems([i for i in multi_indexes if i < track_count])
 
             # Субтитры по номеру
             if save_subtitles:
                 self.create_subtitle_widget(row)
-                subtitles: CheckListCombo | None = widgets.get("subtitles")
+                subtitles: CheckListCombo | None = entry.subtitles
                 if subtitles:
-                    track_count = len(widgets.get("subtitle_tracks") or [])
+                    track_count = len(entry.subtitle_tracks or [])
                     subtitles.SetCheckedItems([i for i in subtitle_indexes if i < track_count])
 
             applied += 1

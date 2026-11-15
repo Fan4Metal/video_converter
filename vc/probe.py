@@ -7,6 +7,7 @@ import threading
 import wx
 
 from vc.estimate import PROBE_POSITIONS, PROBE_SEGMENT_SEC, estimate_qp_video_bitrate_bps
+from vc.file_row import FileRow
 from vc.media_probe import run_ffprobe_json, streams_of_type
 from vc.resources import FFMPEG_PATH, FFPROBE_PATH
 from vc.settings import RowSettings
@@ -31,19 +32,19 @@ class ProbeMixin:
         global_settings = self._global_settings_for_estimate()
         jobs = []
         for row in rows:
-            widgets = self._widgets_at(row)
-            if not widgets:
+            entry = self._entry_at(row)
+            if not entry:
                 continue
             status = self.list.GetItem(row, self.COL_STATUS).GetText()
             if "Конвертация" in status or "Готово" in status:
                 continue
-            settings: RowSettings = widgets.get("settings") or RowSettings()
+            settings: RowSettings = entry.settings or RowSettings()
             if settings.is_global:
                 settings = global_settings
             if settings.skip_video or settings.encode_mode != 0:
                 # Для копирования потока и CBR прогноз и так точный.
                 continue
-            jobs.append((row, widgets, settings, status))
+            jobs.append((row, entry, settings, status))
 
         if not jobs:
             self.log.AppendText("\n⚠ Нет строк для контрольной кодировки: нужны файлы в режиме QP, ещё не сконвертированные.\n")
@@ -61,12 +62,12 @@ class ProbeMixin:
         segments_total = len(jobs) * len(PROBE_POSITIONS)
         done = 0
         try:
-            for job_idx, (row, widgets, settings, status) in enumerate(jobs, start=1):
+            for job_idx, (row, entry, settings, status) in enumerate(jobs, start=1):
                 if self.probe_cancel.is_set():
                     break
-                path = widgets.get("path")
-                gauge: wx.Gauge | None = widgets.get("gauge")
-                duration = float(widgets.get("duration") or 0.0)
+                path = entry.path
+                gauge: wx.Gauge | None = entry.gauge
+                duration = float(entry.duration or 0.0)
                 if not path or not os.path.isfile(path) or duration <= 0:
                     done += len(PROBE_POSITIONS)
                     continue
@@ -78,7 +79,7 @@ class ProbeMixin:
 
                 video_args = self._build_video_args(
                     input_path=path,
-                    video_info=widgets.get("info") or {},
+                    video_info=entry.info or {},
                     skip_video=False,
                     encode_mode=0,
                     qp_slider=settings.quality,
@@ -121,17 +122,17 @@ class ProbeMixin:
 
                 video_bps = int(total_bytes * 8 / total_sec)
                 model_bps = estimate_qp_video_bitrate_bps(
-                    widgets.get("info") or {}, settings.quality, settings.max_res, self.nvenc_available
+                    entry.info or {}, settings.quality, settings.max_res, self.nvenc_available
                 )
-                widgets["probe"] = {
+                entry.probe = {
                     "video_bps": video_bps,
                     "qp": settings.quality,
                     "max_res": settings.max_res,
                     "tonemapping": settings.tonemapping,
                     "nvenc": self.nvenc_available,
                 }
-                old_est = widgets.get("est_text") or "?"
-                wx.CallAfter(self._apply_probe_result, row, widgets, video_bps, model_bps, settings.quality, old_est)
+                old_est = entry.est_text or "?"
+                wx.CallAfter(self._apply_probe_result, row, entry, video_bps, model_bps, settings.quality, old_est)
 
             if self.probe_cancel.is_set():
                 wx.CallAfter(self.progress_label.SetLabel, "⏹ Оценка отменена")
@@ -145,10 +146,10 @@ class ProbeMixin:
             wx.CallAfter(self.progress.SetValue, 0)
             wx.CallAfter(self.enable_interface)
 
-    def _apply_probe_result(self, row: int, widgets: dict, video_bps: int, model_bps: int, qp: int, old_est: str):
+    def _apply_probe_result(self, row: int, entry: FileRow, video_bps: int, model_bps: int, qp: int, old_est: str):
         """UI-поток: пересчитывает прогноз строки и пишет в лог замер и изменение ожидаемого размера."""
         self.update_row_estimate(row)
-        new_est = widgets.get("est_text") or "?"
+        new_est = entry.est_text or "?"
         self.log.AppendText(
             f"   📊 Видео: {video_bps / 1e6:.2f} Мбит/с при QP={qp} (модель давала {model_bps / 1e6:.2f} Мбит/с)\n"
             f"   💾 Ожидаемый размер: {old_est} → {new_est}\n"

@@ -11,10 +11,11 @@ from dataclasses import dataclass
 import wx
 
 from vc.ffmpeg_tools import get_audio_bitrate
+from vc.file_row import FileRow
+from vc.formats import MP4_TAG_EXTENSIONS
 from vc.media_probe import display_dimensions, get_audio_channels, get_hdr_info, get_video_info
 from vc.resources import FFMPEG_PATH, get_resource_path
 from vc.settings import RESOLUTION_LIMITS, RowSettings, resolution_filter, target_resolution
-from vc.formats import MP4_TAG_EXTENSIONS
 from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
 from vc.widgets import CheckListCombo
 
@@ -52,7 +53,7 @@ class ConversionMixin:
             self.cancel_conversion()
             return
 
-        if not self.row_widgets:
+        if not self.entries:
             self.log.AppendText("\n⚠ Нет файлов в очереди.\n")
             return
 
@@ -65,14 +66,14 @@ class ConversionMixin:
             save_subtitles=self.chk_save_subtitles.GetValue(),
         )
         self.debug_output = self.chk_debug.GetValue()
-        self.all_jobs_duration = sum(float(w.get("duration") or 0.0) for w in self.row_widgets.values())
+        self.all_jobs_duration = sum(float(entry.duration or 0.0) for entry in self.entries.values())
         self.done_duration = 0.0
         self.cancel_event.clear()
         self.skip_event.clear()
         self._current_uid = None
         self._queue_row = -1
-        for w in self.row_widgets.values():
-            w["skip"] = False
+        for entry in self.entries.values():
+            entry.skip = False
         self.converting = True
 
         self.btn_start.SetLabel("⏹ Отмена")
@@ -100,16 +101,16 @@ class ConversionMixin:
                 if self.cancel_event.is_set():
                     break
 
-                widgets = self.row_widgets.get(uid)
-                if not widgets:
+                entry = self.entries.get(uid)
+                if not entry:
                     continue
-                path = widgets.get("path")
-                if widgets.get("skip"):
+                path = entry.path
+                if entry.skip:
                     wx.CallAfter(self.log.AppendText, f"\n⏭ Пропущен: {path}\n")
-                    self.done_duration += float(widgets.get("duration") or 0.0)
+                    self.done_duration += float(entry.duration or 0.0)
                     continue
-                duration = float(widgets.get("duration") or 0.0)
-                gauge: wx.Gauge | None = widgets.get("gauge")
+                duration = float(entry.duration or 0.0)
+                gauge: wx.Gauge | None = entry.gauge
                 if not path or not os.path.isfile(path):
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Нет файла")
                     if gauge:
@@ -118,7 +119,7 @@ class ConversionMixin:
 
                 # Выбор дорожек читаем в потоке интерфейса и там же блокируем
                 # виджеты строки, чтобы выбор не поменялся после чтения.
-                selection = self._call_in_ui(self._take_row_selection, widgets, options.save_subtitles)
+                selection = self._call_in_ui(self._take_row_selection, entry, options.save_subtitles)
                 if selection is None:  # отмена, пока ждали поток интерфейса
                     break
                 track_indexes, selected_subtitles = selection
@@ -139,11 +140,11 @@ class ConversionMixin:
                 self.skip_event.clear()
                 self._current_uid = uid
 
-                predicted_size = int(widgets.get("est_bytes") or 0)
+                predicted_size = int(entry.est_bytes or 0)
                 if predicted_size:
                     wx.CallAfter(self.log.AppendText, f"💾 Ожидаемый размер: {human_size(predicted_size)}\n")
 
-                settings = widgets["settings"]
+                settings = entry.settings
 
                 ok = self.run_ffmpeg_with_progress(
                     input_path=path,
@@ -153,13 +154,13 @@ class ConversionMixin:
                     duration=duration,
                     gauge=gauge,
                     settings=settings,
-                    video_info=widgets.get("info") or {},
+                    video_info=entry.info or {},
                     row=row,
-                    widgets=widgets,
+                    entry=entry,
                 )
 
                 if ok and not self.cancel_event.is_set():
-                    widgets.update({"output_file": output_file})
+                    entry.output_file = output_file
                     if options.copy_tags and os.path.splitext(path)[1].lower() in MP4_TAG_EXTENSIONS:
                         tags_ok, tags_err = copy_mp4_tags(path, output_file)
                         if tags_ok:
@@ -172,7 +173,7 @@ class ConversionMixin:
                     except OSError:
                         actual_size = 0
                     if actual_size > 0:
-                        widgets["est_bytes"] = actual_size
+                        entry.est_bytes = actual_size
                         wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, human_size(actual_size))
                         if predicted_size:
                             wx.CallAfter(
@@ -189,7 +190,7 @@ class ConversionMixin:
                     self.skip_event.clear()
                     self._remove_partial_output(output_file)
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏭ Пропущен")
-                    self._restore_row_estimate(row, widgets, predicted_size)
+                    self._restore_row_estimate(row, entry, predicted_size)
                     wx.CallAfter(gauge.SetValue, 0)
                     wx.CallAfter(self.log.AppendText, "⏭ Файл пропущен\n")
                     self.done_duration += duration
@@ -198,13 +199,13 @@ class ConversionMixin:
                     # процесса), файл не занят — можно удалять.
                     self._remove_partial_output(output_file)
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "⏹ Отменено")
-                    self._restore_row_estimate(row, widgets, predicted_size)
+                    self._restore_row_estimate(row, entry, predicted_size)
                     wx.CallAfter(gauge.SetValue, 100)
                     break
                 else:
                     self._remove_partial_output(output_file)
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "❌ Ошибка")
-                    self._restore_row_estimate(row, widgets, predicted_size)
+                    self._restore_row_estimate(row, entry, predicted_size)
                     self.done_duration += duration
                 self.current_output_file = None
 
@@ -251,11 +252,11 @@ class ConversionMixin:
             raise result["error"]
         return result.get("value")
 
-    def _take_row_selection(self, widgets: dict, save_subtitles: bool) -> tuple[list[int], list[dict]]:
+    def _take_row_selection(self, entry: FileRow, save_subtitles: bool) -> tuple[list[int], list[dict]]:
         """Поток интерфейса: выбранные аудиодорожки и субтитры строки; виджеты строки блокируются."""
-        track_indexes = self.selected_audio_tracks(widgets)
-        subtitles = self.get_selected_subtitles(widgets) if save_subtitles else []
-        self._set_row_widgets_enabled(widgets, False)
+        track_indexes = self.selected_audio_tracks(entry)
+        subtitles = self.get_selected_subtitles(entry) if save_subtitles else []
+        entry.set_tracks_enabled(False)
         return track_indexes, subtitles
 
     def on_debug_toggle(self, event):
@@ -263,9 +264,9 @@ class ConversionMixin:
         self.debug_output = self.chk_debug.GetValue()
         event.Skip()
 
-    def get_selected_subtitles(self, widgets: dict) -> list[dict]:
-        subtitle_list: CheckListCombo | None = widgets.get("subtitles")
-        subtitle_tracks = widgets.get("subtitle_tracks") or []
+    def get_selected_subtitles(self, entry: FileRow) -> list[dict]:
+        subtitle_list: CheckListCombo | None = entry.subtitles
+        subtitle_tracks = entry.subtitle_tracks or []
         if not subtitle_list:
             return []
 
@@ -471,7 +472,7 @@ class ConversionMixin:
         settings: RowSettings,
         video_info: dict | None = None,
         row: int = -1,
-        widgets: dict | None = None,
+        entry: FileRow | None = None,
     ) -> bool:
         video_info = video_info or {}
         eff = self._resolve_effective_settings(settings)
@@ -514,7 +515,7 @@ class ConversionMixin:
             if attempt > 0:
                 wx.CallAfter(self.log.AppendText, "🔁 Повтор с программным декодированием\n")
             cmd = [FFMPEG_PATH, "-hide_banner", "-y", *input_args, "-i", input_path, *output_args]
-            result = self._run_ffmpeg_process(cmd, duration, gauge, row, widgets)
+            result = self._run_ffmpeg_process(cmd, duration, gauge, row, entry)
             if result is not False:
                 return bool(result)
         return False
@@ -529,7 +530,7 @@ class ConversionMixin:
         return list(HW_DECODE_ARGS) if self.nvenc_available and not skip_video else []
 
     def _run_ffmpeg_process(
-        self, cmd: list[str], duration: float, gauge: wx.Gauge | None, row: int, widgets: dict | None
+        self, cmd: list[str], duration: float, gauge: wx.Gauge | None, row: int, entry: FileRow | None
     ) -> bool | None:
         """
         Запускает ffmpeg и разбирает прогресс. Возвращает True при успехе,
@@ -605,8 +606,8 @@ class ConversionMixin:
                 encoded_bytes = int(zm.group(1)) * multiplier
                 if encoded_bytes > 0:
                     projected_size = int(encoded_bytes * total_duration / current_time)
-                    if widgets is not None:
-                        widgets["est_bytes"] = projected_size
+                    if entry is not None:
+                        entry.est_bytes = projected_size
                     if row >= 0:
                         wx.CallAfter(self.list.SetStringItem, row, self.COL_EST, f"≈ {human_size(projected_size)}")
 
@@ -661,27 +662,27 @@ class ConversionMixin:
         if not self.converting:
             return
         for row in rows:
-            widgets = self._widgets_at(row)
-            if not widgets:
+            entry = self._entry_at(row)
+            if not entry:
                 continue
             status = self.list.GetItem(row, self.COL_STATUS).GetText()
             if self.row_order[row] == self._current_uid and "Конвертация" in status:
-                self.log.AppendText(f"\n⏭ Пропуск текущего файла: {widgets.get('path')}\n")
+                self.log.AppendText(f"\n⏭ Пропуск текущего файла: {entry.path}\n")
                 self.skip_event.set()
                 self._kill_process(self.process)
             elif status == "Ожидает" and row > self._queue_row:
-                widgets["skip"] = True
+                entry.skip = True
                 self.list.SetStringItem(row, self.COL_STATUS, "⏭ Пропущен")
-                self.log.AppendText(f"⏭ Будет пропущен: {widgets.get('path')}\n")
+                self.log.AppendText(f"⏭ Будет пропущен: {entry.path}\n")
 
     def unskip_rows(self, rows: list[int]):
         """Возвращает в очередь строки, помеченные на пропуск, до которых очередь ещё не дошла."""
         for row in rows:
-            widgets = self._widgets_at(row)
-            if widgets and widgets.get("skip") and row > self._queue_row:
-                widgets["skip"] = False
+            entry = self._entry_at(row)
+            if entry and entry.skip and row > self._queue_row:
+                entry.skip = False
                 self.list.SetStringItem(row, self.COL_STATUS, "Ожидает")
-                self.log.AppendText(f"↩ Возвращён в очередь: {widgets.get('path')}\n")
+                self.log.AppendText(f"↩ Возвращён в очередь: {entry.path}\n")
 
     def _remove_partial_output(self, output_file: str | None):
         """Удаляет недописанный выходной файл после пропуска (фоновый поток)."""
