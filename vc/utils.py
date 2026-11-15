@@ -40,6 +40,19 @@ def format_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def format_elapsed(elapsed: float, media_duration: float = 0.0) -> str:
+    """
+    Затраченное время для лога: «00:01:23 (2.5x)», где в скобках — во сколько
+    раз быстрее реального времени шла обработка (длительность ролика / время).
+    Меньше минуты — секунды с десятыми: «12.3 с».
+    """
+    # Порог 59.95: иначе 59.96 округлилось бы в «60.0 с».
+    text = f"{elapsed:.1f} с" if elapsed < 59.95 else format_time(elapsed)
+    if elapsed > 0 and media_duration > 0:
+        text += f" ({media_duration / elapsed:.1f}x)"
+    return text
+
+
 def to_int(value, default: int = 0) -> int:
     """Безопасное приведение к int (ffprobe часто отдаёт числа строками или None)."""
     try:

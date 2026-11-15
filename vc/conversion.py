@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import winsound
 from collections import deque
 from collections.abc import Callable
@@ -16,7 +17,7 @@ from vc.formats import MP4_TAG_EXTENSIONS
 from vc.media_probe import display_dimensions, get_audio_channels, get_hdr_info, get_video_info
 from vc.resources import FFMPEG_PATH, get_resource_path
 from vc.settings import RESOLUTION_LIMITS, RowSettings, resolution_filter, target_resolution
-from vc.utils import copy_mp4_tags, format_time, human_size, unique_output_path
+from vc.utils import copy_mp4_tags, format_elapsed, format_time, human_size, unique_output_path
 from vc.widgets import CheckListCombo
 
 # Тип NAL-блока 6 — SEI, в нём H.264 несёт скрытые субтитры EIA-608/CEA-608.
@@ -89,6 +90,8 @@ class ConversionMixin:
     def queue_worker(self):
         self.current_output_file = None
         options: QueueOptions = self.queue_options
+        queue_started = time.monotonic()
+        converted_count = 0
         try:
             # Обход по индексу без снимка: во время конвертации удаление и
             # сортировка заблокированы, а новые строки добавляются только в конец
@@ -146,6 +149,8 @@ class ConversionMixin:
 
                 settings = entry.settings
 
+                # Время конвертации файла — вместе с повтором без NVDEC, если он понадобился.
+                file_started = time.monotonic()
                 ok = self.run_ffmpeg_with_progress(
                     input_path=path,
                     output_path=output_file,
@@ -158,8 +163,10 @@ class ConversionMixin:
                     row=row,
                     entry=entry,
                 )
+                elapsed = time.monotonic() - file_started
 
                 if ok and not self.cancel_event.is_set():
+                    converted_count += 1
                     entry.output_file = output_file
                     if options.copy_tags and os.path.splitext(path)[1].lower() in MP4_TAG_EXTENSIONS:
                         tags_ok, tags_err = copy_mp4_tags(path, output_file)
@@ -184,6 +191,7 @@ class ConversionMixin:
                             wx.CallAfter(self.log.AppendText, f"💾 Размер: {human_size(actual_size)}\n")
                     wx.CallAfter(self.list.SetStringItem, row, self.COL_STATUS, "✅ Готово")
                     wx.CallAfter(gauge.SetValue, 100)
+                    wx.CallAfter(self.log.AppendText, f"⏱ Время конвертации: {format_elapsed(elapsed, duration)}\n")
                     wx.CallAfter(self.log.AppendText, "\n ✅ Конвертация завершена\n")
                     self.done_duration += duration
                 elif self.skip_event.is_set() and not self.cancel_event.is_set():
@@ -209,6 +217,11 @@ class ConversionMixin:
                     self.done_duration += duration
                 self.current_output_file = None
 
+            queue_elapsed = format_elapsed(time.monotonic() - queue_started)
+            wx.CallAfter(
+                self.log.AppendText,
+                f"\n{'-' * 30}\n⏱ Очередь: {queue_elapsed}, сконвертировано файлов: {converted_count}\n",
+            )
             if self.cancel_event.is_set():
                 wx.CallAfter(self.log.AppendText, "⏹ Остановлено.\n")
                 wx.CallAfter(self.progress_label.SetLabel, "⏹ Очередь остановлена пользователем")
