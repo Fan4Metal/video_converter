@@ -166,6 +166,7 @@ class ProbeMixin:
             f"{start:.3f}",
             "-t",
             f"{length:.3f}",
+            *self.hw_decode_args(skip_video=False),
             "-i",
             path,
             "-map",

@@ -15,6 +15,7 @@ The app is designed for batch work: a file list, shared encoding settings in the
 - **Batch conversion** of a file queue with both overall and per-row progress. Files can be added while a conversion is running — they are appended to the queue; any queued file can be skipped.
 - **"Convert" item in the Explorer context menu** for video files (all input formats except TS): the selected files (several at once, too) are sent to the already open app window. The item is registered by an option in the installer.
 - **NVENC hardware encoding** (`h264_nvenc`, preset `p4`, profile `high`, `spatial_aq`). If NVENC is unavailable, the app falls back to the `libx264` software encoder — slower, same output format.
+- **NVDEC hardware decoding** (`-hwaccel cuda`) when the video is re-encoded: HEVC 10-bit 4K converts 2–2.5× faster. Codecs NVDEC can't handle are decoded in software; if ffmpeg fails with hardware decoding, the file is re-encoded once more with software decoding.
 - **Two rate-control modes:** constant quality (QP/CRF, range 14–30) and constant bitrate (CBR).
 - **Output size prediction** before the conversion starts — the "Expected size" column.
 - **HDR → SDR tone mapping** (`zscale` + `tonemap=hable`) with Auto / On / Off.
@@ -132,6 +133,7 @@ uv sync --no-dev
 
 ## Technical details
 
+- Decoding: `-hwaccel cuda` when an NVIDIA GPU is present and the video is re-encoded (frames are downloaded to system memory, filters run on the CPU).
 - Video: `h264_nvenc` (VBR with `-cq` for QP, or `-b:v`/`-maxrate`/`-bufsize` for CBR), falling back to `libx264` (`-crf` / CBR, preset `medium`).
 - Output pixel format is `yuv420p`; tone mapping uses the chain `zscale=t=linear:npl=30 → tonemap=hable:param=1.5 → zscale=t=bt709:m=bt709`.
 - Downscaling uses the `scale` filter (lanczos, `force_original_aspect_ratio=decrease`, both sides even) after tone mapping; the box follows the frame orientation after the phone rotation tag has been applied.
